@@ -13,9 +13,12 @@ demoed.
 
 ## Status
 
-**Day 1 complete**: API, auth, board ownership, frontend. **Day 2/3** (Playwright
-E2E, Pact contract test, security tests, CI, Docker) not started yet — see
-[Roadmap](#roadmap).
+**Day 1 complete**: API, auth, board ownership, frontend.
+**Day 2 in progress**: Playwright E2E (POM structure, API-bootstrapped auth
+fixture, cross-browser, visual regression) done; Pact contract test and
+IDOR/JWT/rate-limit security tests not started yet — see [Roadmap](#roadmap).
+MongoDB runs via Docker Compose (`npm run mongo:up`), pulled forward from Day 3
+since Playwright needs a real, persistent database to run against.
 
 ## Repo structure
 
@@ -160,10 +163,47 @@ library to justify at this scale, it's keyboard-accessible, and it gives Playwri
 a deterministic interaction to drive — simulated drag gestures are one of the
 flakier things to automate reliably in browser test tools.
 
+### End-to-end (Playwright)
+
+**POM classes, not raw locators in tests.** One class per page
+(`LoginPage`/`SignupPage`/`BoardsPage`/`BoardPage`), each exposing locators built
+on `data-testid`s and action methods (`login()`, `addCard()`) rather than tests
+touching selectors directly — one place to fix if markup changes.
+
+**Locators match on a specific descendant (`filter({ has })`), not substring text
+(`filter({ hasText })`).** `hasText` matches an element's *entire* text content,
+including nested children — for a board column, that includes every card's "Move
+to…" `<option>` labels, which are literally other lists' names. This caused a real
+bug (see [Bugs found via testing](#bugs-found-via-testing) below): once a card
+sat in "Doing" with "To Do" as its only other destination, its own dropdown
+contained the text "To Do", making `listColumn("To Do")` match the wrong column.
+
+**Auth fixture bootstraps a session via the API, not the signup UI.**
+`fixtures/auth.fixture.ts` signs up a fresh, throwaway-per-test user directly
+against the API; `context.request` shares its cookie jar with the browser
+context, so the resulting httpOnly cookie authenticates the page with no UI
+interaction. Standard "bypass the UI for setup, only exercise the UI for what
+the test is actually about" practice — faster, and each test's data is isolated
+by construction (a unique user), not by database reset between tests.
+
+**Two rendering engines locally (Chromium + WebKit), not three.** Firefox's
+Windows build needs the Microsoft Visual C++ Redistributable, not installed on
+this dev machine; installing a system package wasn't something to do inside a
+test-config decision. `playwright.config.ts` documents how to add it back.
+
+**Visual regression baselines are Windows-generated and will need
+regenerating on Linux CI** (Day 3) — font rendering differs enough between
+operating systems that pixel-diff baselines aren't portable across them. This is
+a known, general limitation of screenshot-based visual regression, not specific
+to this setup.
+
 ### Testing infrastructure
 
 **`mongodb-memory-server` for API tests**, not a shared/Docker Mongo instance:
 tests get an isolated, ephemeral database with no external service dependency.
+E2E tests, by contrast, run against the real Docker-Composed MongoDB (`npm run
+mongo:up`), since Playwright drives the actual running app rather than importing
+it in-process.
 
 ## Bugs found via testing
 
@@ -202,6 +242,36 @@ Fix: gave the hint text an explicit `.auth-hint` class instead of relying on
 `form > p` to distinguish it from other paragraphs in the form — a good reminder
 that structural selectors scoped only by DOM position are fragile the moment a
 sibling with different intent gets added.
+
+### 3. A Playwright locator bug that looked exactly like an app bug (test code)
+
+While writing the move-card-between-lists E2E test, `expect(listColumn("To
+Do").getByTestId("card-item")).toHaveCount(0)` kept finding 1 card after a move
+that should have emptied that list — consistently, not flakily, which made it look
+like a real move-logic bug in the frontend.
+
+It wasn't. `listColumn()`/`cardItem()` were built on
+`getByTestId(...).filter({ hasText: title })`, and `hasText` substring-matches an
+element's **entire text content**, not just its own label. Once the card actually
+moved to "Doing", its own "Move to…" `<select>` now offers "To Do" as the only
+remaining option — so the string "To Do" appears inside `<option>To Do</option>`,
+which is part of the *"Doing"* column's text content. `listColumn("To Do")` was
+therefore matching **both** columns, and the "leftover card in To Do" the
+assertion kept finding was the same card, in "Doing", matched through its own
+dropdown.
+
+Confirmed the app was correct throughout before touching any test code: called
+`PATCH .../cards/:id` directly and checked both lists' `GET` responses, which
+showed the move had worked correctly server-side every time. That ruled out the
+backend, then browser console logging in `handleCardMoved`/`handleCardCreated`
+showed the frontend's React state was also transitioning correctly — which meant
+the bug had to be in what the *test* was looking at, not what the app was doing.
+
+Fix: match on a specific descendant (`filter({ has: <locator> })`, matching the
+column's own `<h2>` heading or the card's own title element) instead of a loose
+substring match against the whole subtree. `has` checks containment of one
+specific element; `hasText` checks the text of everything inside, including
+nested `<option>` labels that happen to be words the test is also searching for.
 
 ## Roadmap
 
