@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import * as boardsApi from "../api/boards";
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/useAuth";
@@ -62,7 +63,7 @@ export function BoardsPage() {
         <ul data-testid="board-list">
           {boards.map((board) => (
             <li key={board.id} data-testid="board-item">
-              {board.title}
+              <Link to={`/boards/${board.id}`}>{board.title}</Link>
             </li>
           ))}
         </ul>
