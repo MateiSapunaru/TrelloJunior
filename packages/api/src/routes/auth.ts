@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { clearAuthCookie, setAuthCookie, TOKEN_TTL_MS } from "../lib/authCookie";
 import { getUserId } from "../lib/requestContext";
 import { requireAuth } from "../middleware/auth";
+import { loginRateLimiter } from "../middleware/loginRateLimit";
 import User from "../models/User";
 
 const router = Router();
@@ -52,7 +53,7 @@ router.post("/signup", async (req, res) => {
   res.status(201).json({ user: { id: user.id, email: user.email, name: user.name } });
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", loginRateLimiter, async (req, res) => {
   const { email, password } = req.body ?? {};
 
   if (typeof email !== "string" || typeof password !== "string") {
