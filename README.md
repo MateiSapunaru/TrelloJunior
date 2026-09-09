@@ -1,5 +1,7 @@
 # TrelloJunior
 
+[![CI](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml/badge.svg)](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml)
+
 A Trello-style task/kanban board app, built as the target application for a layered
 QA automation portfolio suite. The app itself (Express + MongoDB API, React
 frontend, JWT auth with board ownership/collaborators) is the *means*; the point of
@@ -17,10 +19,13 @@ demoed.
 **Day 2 complete**: Playwright E2E (POM structure, API-bootstrapped auth
 fixture, cross-browser, visual regression), Pact contract test (auth
 endpoints), and a security test suite (IDOR route sweep, JWT tampering,
-email-keyed login rate limiting). **Day 3 not started** — see
-[Roadmap](#roadmap). MongoDB runs via Docker Compose (`npm run mongo:up`),
-pulled forward from Day 3 since Playwright and Pact both need a real,
-persistent database to run against.
+email-keyed login rate limiting).
+**Day 3 complete**: the app itself is containerized (Docker + Docker Compose),
+CI runs on every push ([GitHub Actions](https://github.com/MateiSapunaru/TrelloJunior/actions),
+5 parallel jobs: api/contract/ui/security/docker), and an OWASP ZAP baseline
+scan runs against the built app with its report uploaded as a build artifact.
+See [Roadmap](#roadmap) for what's genuinely still open (none of the original
+3-day scope — everything past this point would be additions, not gaps).
 
 ## Repo structure
 
@@ -273,6 +278,95 @@ mongo:up`), since Playwright drives the actual running app rather than importing
 it in-process. Pact provider verification reuses the same shared-mongod setup as
 the main API suite, since its state handlers need a real database to seed.
 
+### Docker
+
+**Multi-stage builds, running compiled output, not dev-mode tooling.**
+`packages/api/Dockerfile` runs `node dist/server.js`, not `tsx watch`;
+`packages/web/Dockerfile` serves a `vite build` output via nginx, not the Vite
+dev server. The build stage's `node_modules` (and TypeScript source) never
+make it into the runtime image — only compiled JS/static assets do.
+
+**Every workspace's `package.json` gets copied into the build context, not
+just the one being built.** npm workspaces' lockfile validation needs every
+workspace present for `npm ci` to succeed, even though only that package's
+actual source and output end up in the image. Standard pattern for Docker +
+npm-workspaces monorepos, not an oversight of "why does the API image know
+about the web package".
+
+**`VITE_API_URL` is a build ARG, not a runtime env var** — Vite inlines
+`import.meta.env.*` into the built JS bundle at build time, unlike a Node
+server that reads `process.env` per-request. It has to be the URL the
+*browser* can reach the API at (`http://localhost:4000`, matching the
+API's host-mapped port), not an internal Docker service hostname like
+`http://api:4000`, which would resolve fine for other containers but not for
+a browser tab running on the host.
+
+**CI does *not* use `docker-compose` to run the test jobs** — see
+[Contract testing](#contract-testing-pact) and the api/ui/security job
+descriptions below for the same reasoning applied consistently: a test
+runner shouldn't orchestrate Docker itself. `docker-compose.yml` is for local
+dev and for running the finished app; CI's `docker` job only smoke-builds
+both Dockerfiles to prove they still work, and doesn't push or deploy them
+anywhere.
+
+### CI/CD (GitHub Actions)
+
+Five jobs, all running in parallel (no `needs:` between them):
+
+- **`api`** — `npm test -w packages/api`: functional and security tests
+  together (same Vitest suite, same infra — see
+  [Security tests](#security-tests)). No Mongo service container: this suite
+  starts its own throwaway `mongod` via `mongodb-memory-server`, same as
+  running it locally. The downloaded binary (~700MB on first use) is cached
+  across runs.
+- **`contract`** — consumer Pact test, then provider verification, sequenced
+  in one job (verification needs the file the consumer step just generated).
+- **`ui`** — Playwright, with a real MongoDB service container since this
+  actually runs the app rather than importing it in-process. Re-adds Firefox
+  for real 3-engine coverage — excluded locally only because this dev
+  machine is missing a Windows-specific dependency a Linux runner doesn't
+  need. Uploads the HTML report as a build artifact regardless of outcome.
+- **`security`** — the ZAP baseline scan (see below).
+- **`docker`** — smoke-builds both Dockerfiles (see [Docker](#docker)).
+
+**Jobs needing a real running server build it and start it in the
+background**, rather than reusing Playwright's dev-server-spawning
+`webServer` config (that mechanism is specific to the Playwright test
+runner) — `nohup npm start -w packages/api &` / `npm run preview -w
+packages/web &`, then a short polling loop against `/health` before the next
+step runs.
+
+### Security scanning (OWASP ZAP)
+
+**A passive-only baseline scan**, not an active scan — matches the "narrow,
+explicitly-scoped" security claim already established by the Vitest security
+suite. Runs against the actually-built, actually-running app (`vite preview`
+serving the production build), not the dev server.
+
+**`allow_issue_writing: false`, set explicitly.** The action's own default is
+`true` — it opens or updates a GitHub issue with the findings on every run
+using the default token. That's not something a CI job should do
+unprompted on every push; the uploaded report artifact is the actual
+deliverable the original plan called for ("results as a build artifact").
+
+**`fail_action: false`.** Baseline findings are informational/advisory at
+this scope — the report is meant to be read, not to hard-block a merge. Can
+be tightened later if wanted.
+
+**The scan found real gaps on its first run, and they're fixed, not just
+logged** — see [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infra--frontend)
+below. `packages/web/nginx.conf` and `packages/web/vite.config.ts`'s
+`preview.headers` both carry the same CSP/`X-Frame-Options`/
+`X-Content-Type-Options` headers now, since they're two independent static
+servers (nginx for the real Docker deployment, `vite preview` for what CI's
+`security` job actually scans) with no shared config layer between them.
+Remaining findings (`Cross-Origin-*-Policy` headers, a stricter
+per-directive CSP, `Permissions-Policy`) are progressively more niche for
+this app — COEP/COOP specifically matter for cross-origin isolation
+scenarios (e.g. `SharedArrayBuffer`) this app doesn't use — and are left as
+known, understood follow-ups rather than chased to zero findings for its
+own sake.
+
 ## Bugs found via testing
 
 ### 1. Mongo test infra crash (backend)
@@ -341,6 +435,81 @@ substring match against the whole subtree. `has` checks containment of one
 specific element; `hasText` checks the text of everything inside, including
 nested `<option>` labels that happen to be words the test is also searching for.
 
+### 4. `express-rate-limit` crashed on startup, but only under `NODE_ENV=production` (backend)
+
+The login rate limiter (see [Security tests](#security-tests)) worked fine
+in every local run and in the Vitest suite, then threw a `ValidationError`
+the moment the Docker image actually started:
+`ERR_ERL_KEY_GEN_IPV6 — Custom keyGenerator appears to use request IP
+without calling the ipKeyGenerator helper function for IPv6 addresses`.
+
+The limiter's `keyGenerator` keys by the attempted email, with a fallback to
+`req.ip` for the (route-validated-anyway) case where email is missing. That
+fallback used the raw IP directly. `express-rate-limit` requires wrapping
+any IP-based key in its `ipKeyGenerator()` helper, which normalizes IPv6
+addresses down to a subnet — without it, a client can trivially rotate
+through many addresses within their own /64 to bypass the limit, since each
+one would count as a "different" client. The check that catches this only
+runs under `NODE_ENV=production` (skipped in dev for speed), which is
+exactly the env the Docker image sets and local `npm run dev`/tests never
+do — the container was the first thing to actually exercise that code path.
+
+Fix: wrap the fallback in `ipKeyGenerator(req.ip)`, per the library's own
+documented pattern. Confirmed clean startup afterward and reran the full
+Vitest suite (49/49) to confirm no regression.
+
+### 5. Session persistence broke in WebKit specifically, only against the container (backend/frontend boundary)
+
+Running the E2E suite against the newly-Dockerized app for the first time,
+one test failed in WebKit only: session persistence after a page reload.
+Chromium passed the identical test.
+
+The auth cookie's `secure` flag was `process.env.NODE_ENV === "production"`
+— true inside the Docker image, same as bug #4. But this Docker Compose
+setup serves over plain HTTP on `localhost`, not HTTPS. Chromium tolerates a
+`Secure` cookie on `localhost` over HTTP as a developer convenience; WebKit
+does not; it correctly refuses to store the cookie at all. Login still
+returned 200 (the cookie was *sent* in the response, just never *kept* by
+the browser), so the failure only showed up on the very next request — in
+this case, the reload.
+
+Root cause was conflating two different questions under one flag:
+`NODE_ENV` should mean "run the optimized/compiled build"; whether a
+deployment actually terminates TLS is a separate, deployment-specific fact.
+Fixed by splitting them: `NODE_ENV=production` stays true in the Docker
+image (it *is* a production build), and a new dedicated `COOKIE_SECURE` env
+var (false in `docker-compose.yml`, since this is plain HTTP) controls the
+cookie flag instead. Confirmed by rerunning the Playwright suite against the
+rebuilt containers — WebKit passed, all 18 tests green.
+
+### 6. ZAP baseline scan found real missing security headers (infra/frontend)
+
+The whole point of wiring up the ZAP scan (see
+[Security scanning](#security-scanning-owasp-zap)) is that it's supposed to
+find things — and its first real run did: 0 High, 3 Medium (no CSP header,
+no anti-clickjacking header, no Subresource Integrity attribute), 5 Low
+(missing `X-Content-Type-Options` and several `Cross-Origin-*-Policy`
+headers), 3 Informational.
+
+Fixed the two clearly-applicable ones by adding `X-Content-Type-Options`,
+`X-Frame-Options`, and a real `Content-Security-Policy` — first to
+`nginx.conf` (the real Docker deployment), then discovered the CI
+`security` job doesn't scan that at all: it scans `vite preview`'s output
+(a second, independent static-file server used only for that CI job), which
+has its own default headers untouched by nginx's config. Added the
+identical headers there too via `vite.config.ts`. Verified in a real browser
+(a fresh tab, to rule out stale console history) that the CSP doesn't break
+anything — Google Fonts still loads, signup/auth/board creation all still
+work, zero console errors — before trusting it, and re-ran the scan
+afterward to confirm the Medium/Low counts actually dropped.
+
+Left the Subresource Integrity finding as understood-but-not-fixed: SRI
+hashes protect against a *third-party* CDN serving tampered content, and
+this bundle is self-hosted, same-origin, built from source in CI — the
+threat model SRI addresses doesn't really apply here. Documented that
+reasoning rather than adding a Vite plugin to silence a finding whose
+premise doesn't hold for this deployment shape.
+
 ## Roadmap
 
 - **Day 2 — done**: Playwright E2E suite (POM structure, cross-browser, visual
@@ -348,7 +517,18 @@ nested `<option>` labels that happen to be words the test is also searching for.
   [Design decisions](#contract-testing-pact)); IDOR/JWT-tampering/rate-limit
   security tests added to the API suite (see
   [Design decisions](#security-tests)).
-- **Day 3**: OWASP ZAP baseline scan wired into CI (results as a build artifact),
-  GitHub Actions with parallel UI/API/contract/security jobs, Docker + Docker
-  Compose for the app itself (MongoDB is already containerized — see
-  [Running it locally](#running-it-locally)).
+- **Day 3 — done**: Docker + Docker Compose for the whole app (see
+  [Docker](#docker)); GitHub Actions CI with 5 parallel jobs (see
+  [CI/CD](#cicd-github-actions)); OWASP ZAP baseline scan wired in, its
+  findings actually fixed rather than just reported (see
+  [Security scanning](#security-scanning-owasp-zap) and
+  [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infrafrontend)).
+
+Everything from the original 3-day plan is built. Genuine next steps, not
+gaps in what was promised: a Pact Broker (currently local pact files — see
+[Contract testing](#contract-testing-pact)); contracting the
+authenticated board/list/card endpoints (needs Pact's provider-state +
+`requestFilter` pattern to inject a real session cookie); tightening the
+remaining ZAP findings (`Cross-Origin-*-Policy` headers, a stricter
+per-directive CSP); and a branch-protection rule requiring CI to pass before
+merge, once this repo has more than one contributor for that to matter.
