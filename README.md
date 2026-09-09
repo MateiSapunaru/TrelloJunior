@@ -2,18 +2,12 @@
 
 [![CI](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml/badge.svg)](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml)
 
-A Trello-style kanban board app, built as the target application for a layered QA
-automation portfolio. The app itself (Express + MongoDB API, React frontend, JWT
-auth with board ownership/collaborators) is the *means*; the point of this repo is
-the test automation built around it — 49 API-level tests, a 27-scenario
-cross-browser E2E suite with visual regression, a consumer-driven contract test,
-a narrow security test suite (IDOR, JWT tampering, rate limiting), and a DAST
-scan wired into CI.
-
-This README documents *why* things are built the way they are, not just how to
-run them, and is written to be defended in an interview, not just skimmed. If a
-decision looks arguable, the reasoning for it is somewhere below — not left
-implicit.
+A Trello-style kanban board app: an Express + MongoDB API and a React frontend
+with JWT auth, board ownership, and collaborators. It's paired with a full QA
+automation suite around it: 49 API-level tests, a 27-scenario cross-browser
+E2E suite with visual regression, a consumer-driven contract test, a security
+test suite (IDOR, JWT tampering, rate limiting), and a DAST scan, all wired
+into CI.
 
 ## Contents
 
@@ -29,11 +23,10 @@ implicit.
 
 ## Testing strategy
 
-The app is intentionally small — a handful of resources, one auth model. The
-test automation around it isn't small because the app is complex; it's built at
-this depth to demonstrate how a QA engineer would actually approach a real
-system: layered by cost and confidence, risk-based rather than exhaustive, and
-proven — not asserted — with real, documented bugs each layer caught.
+The app itself is small — a handful of resources, one auth model. The test
+automation around it is layered by cost and confidence, risk-based rather
+than exhaustive, and backed by real, documented bugs each layer caught (see
+[Bugs this suite has actually caught](#bugs-this-suite-has-actually-caught)).
 
 ### The pyramid, and why each layer is shaped the way it is
 
@@ -106,21 +99,19 @@ resets the database between tests as a second layer of isolation, but the
 principle — it directly shaped how the login rate-limit test was built (see
 [Security tests](#security-tests)).
 
-### Evidence, not a claim
+### Bugs this suite has actually caught
 
-None of the above is theoretical. [Bugs found via testing](#bugs-found-via-testing)
-documents six real, specific bugs this test suite caught — a Mongo test-infra
-crash, an accessibility contrast bug, a Playwright locator bug, an IPv6
-rate-limiter validation failure that only surfaced in a production build, a
-WebKit-specific session bug that only surfaced against a real container, and
-real missing-security-headers findings from the ZAP scan that got fixed, not
-just logged. Each one includes the actual root cause and the actual fix — the
-kind of debugging trail an interviewer can ask follow-up questions about.
+[Bugs found via testing](#bugs-found-via-testing) covers six specific ones: a
+Mongo test-infra crash, an accessibility contrast bug, a Playwright locator
+bug, an IPv6 rate-limiter validation failure that only surfaced in a
+production build, a WebKit-specific session bug that only surfaced against a
+real container, and missing-security-header findings from the ZAP scan that
+got fixed rather than just logged.
 
 ## Test suite reference
 
-What's actually being verified, layer by layer. Every test title below is the
-literal test name in the repo — nothing paraphrased or rounded up.
+What's actually being verified, layer by layer. Test titles below are pulled
+directly from the source files.
 
 ### API functional tests — `packages/api/tests/*.test.ts` (25 tests)
 
@@ -312,11 +303,10 @@ for what it found and how it was fixed.
 
 ## Status
 
-The app, its full test automation suite, and its delivery pipeline (Docker +
-CI + a security scan) are complete and CI-verified on every push —
-[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions) has the
-live results. See [Possible next steps](#possible-next-steps) for what's
-genuinely still open: extensions beyond the original scope, not gaps in it.
+The app, its test automation suite, and its delivery pipeline (Docker, CI, a
+security scan) are complete and verified on every push via the
+[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions). See
+[Possible next steps](#possible-next-steps) for planned extensions.
 
 ## Repo structure
 
@@ -379,8 +369,9 @@ container; `docker compose down` stops the full stack.
 | Docker images build | `docker build -f packages/api/Dockerfile .` / same for `packages/web/Dockerfile` | Docker |
 
 All of the above also run automatically on every push — see
-[CI/CD](#cicd-github-actions) — and the [Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions)
-has the real, current results rather than a claim in this README.
+[CI/CD](#cicd-github-actions) and the
+[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions) for
+current results.
 
 ## Design decisions
 
@@ -450,10 +441,9 @@ documents referencing ids that no longer resolve to anything.
 
 **List/Card `position` is a plain client-assigned integer — no server-side
 reordering of siblings.** A production drag-and-drop board at scale would use
-fractional/lexicographic positions to avoid rewriting every sibling's position on
-every reorder. Explicitly not built here: it's real complexity that isn't the point
-of this portfolio (test automation is), so it's called out as a known
-simplification rather than hidden.
+fractional/lexicographic positions to avoid rewriting every sibling's position
+on every reorder. Not needed at this app's current scope, so it's a known,
+intentional simplification rather than something to build out speculatively.
 
 **Login is hardened against both user-enumeration and its timing side-channel.**
 Wrong password and nonexistent email return the identical `401` and error message.
@@ -717,8 +707,7 @@ serving the production build), not the dev server.
 **`allow_issue_writing: false`, set explicitly.** The action's own default is
 `true` — it opens or updates a GitHub issue with the findings on every run
 using the default token. That's not something a CI job should do
-unprompted on every push; the uploaded report artifact is the actual
-deliverable the original plan called for ("results as a build artifact").
+unprompted on every push; the uploaded report artifact is the deliverable.
 
 **`fail_action: false`.** Baseline findings are informational/advisory at
 this scope — the report is meant to be read, not to hard-block a merge. Can
@@ -784,9 +773,9 @@ inside the same `<form>`. Its specificity (`0,1,2`) beat the alert's own
 `[role="alert"]` rule (`0,1,0`), so the muted-gray hint-text color silently won.
 
 Fix: gave the hint text an explicit `.auth-hint` class instead of relying on
-`form > p` to distinguish it from other paragraphs in the form — a good reminder
-that structural selectors scoped only by DOM position are fragile the moment a
-sibling with different intent gets added.
+`form > p` to distinguish it from other paragraphs in the form. Structural
+selectors scoped only by DOM position break the moment a sibling with
+different intent gets added.
 
 </details>
 
@@ -891,9 +880,9 @@ rebuilt containers — WebKit passed, all 18 tests green.
 <details>
 <summary>root cause and fix — click to expand</summary>
 
-The whole point of wiring up the ZAP scan (see
-[Security scanning](#security-scanning-owasp-zap)) is that it's supposed to
-find things — and its first real run did: 0 High, 3 Medium (no CSP header,
+A scan is only useful if it actually finds something (see
+[Security scanning](#security-scanning-owasp-zap)), and its first real run
+did: 0 High, 3 Medium (no CSP header,
 no anti-clickjacking header, no Subresource Integrity attribute), 5 Low
 (missing `X-Content-Type-Options` and several `Cross-Origin-*-Policy`
 headers), 3 Informational.
@@ -920,11 +909,10 @@ premise doesn't hold for this deployment shape.
 
 </details>
 
-
 ## Possible next steps
 
-Everything from the original plan is built (see [Status](#status)) — these are
-extensions beyond that scope, not gaps in it:
+The app and its full test/delivery pipeline are done (see [Status](#status)).
+These are extensions beyond that scope:
 
 - A real **Pact Broker** (currently local pact files — see
   [Contract testing](#contract-testing-pact)) for versioning and
