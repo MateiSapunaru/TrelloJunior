@@ -25,7 +25,7 @@ implicit.
 - [Running the tests](#running-the-tests)
 - [Design decisions](#design-decisions)
 - [Bugs found via testing](#bugs-found-via-testing)
-- [Roadmap](#roadmap)
+- [Possible next steps](#possible-next-steps)
 
 ## Testing strategy
 
@@ -98,21 +98,13 @@ different way that rule could break:
 ### Test hygiene: independence and isolation
 
 Every test — API, security, contract, E2E — creates its own fresh data (a
-uniquely-emailed user, sometimes a board/list/card built from that user) rather
-than relying on seeded fixtures or a fixed test account. Two consequences worth
-calling out explicitly, because they're the kind of thing that's easy to get
-wrong and expensive to debug later:
-
-- **No test depends on run order or another test's leftover state.** The API
-  suite still resets the database between tests (`afterEach` in
-  `tests/setup.ts`) as a second layer of isolation, but the *design* doesn't
-  rely on that reset to be correct — each test would still be independent
-  without it.
-- **The login rate-limit test needed this reasoning explicitly** — see
-  [Security tests](#security-tests) below for why keying the limiter by email
-  rather than IP was the design choice that made "verify the exact boundary
-  (10 allowed, 11th blocked)" possible without a manual reset hook, in a
-  suite where every test shares one process and one Express app instance.
+uniquely-emailed user, sometimes a board/list/card built from that user)
+rather than relying on seeded fixtures or a fixed test account, so no test
+depends on run order or another test's leftover state. The API suite also
+resets the database between tests as a second layer of isolation, but the
+*design* doesn't rely on that reset to be correct. This isn't just a
+principle — it directly shaped how the login rate-limit test was built (see
+[Security tests](#security-tests)).
 
 ### Evidence, not a claim
 
@@ -320,22 +312,11 @@ for what it found and how it was fixed.
 
 ## Status
 
-**All three planned phases are complete and CI-verified on every push:**
-
-- **Phase 1 — Application**: Express + MongoDB API, JWT-in-httpOnly-cookie
-  auth, board ownership/collaborators, React frontend.
-- **Phase 2 — Test automation**: Playwright E2E (POM structure,
-  API-bootstrapped auth fixture, cross-browser, visual regression), Pact
-  contract test, security test suite (IDOR sweep, JWT tampering, rate
-  limiting).
-- **Phase 3 — Delivery pipeline**: the app is containerized (Docker + Docker
-  Compose), [CI runs 5 parallel jobs](https://github.com/MateiSapunaru/TrelloJunior/actions)
-  on every push (api/contract/ui/security/docker), and an OWASP ZAP baseline
-  scan runs against the built app with its report uploaded as a build
-  artifact.
-
-See [Roadmap](#roadmap) for what's genuinely still open — extensions beyond
-the original scope, not gaps in what was promised.
+The app, its full test automation suite, and its delivery pipeline (Docker +
+CI + a security scan) are complete and CI-verified on every push —
+[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions) has the
+live results. See [Possible next steps](#possible-next-steps) for what's
+genuinely still open: extensions beyond the original scope, not gaps in it.
 
 ## Repo structure
 
@@ -404,6 +385,9 @@ has the real, current results rather than a claim in this README.
 ## Design decisions
 
 ### Backend
+
+<details>
+<summary>10 decisions — why the API is built this way</summary>
 
 **Express `app.ts` / `server.ts` split.** `app.ts` exports the Express app with zero
 side effects on import — no DB connection, no `.listen()`. `server.ts` is the only
@@ -478,7 +462,13 @@ DB miss, so skipping it for a nonexistent user would leak whether an email is
 registered via response time. The fix: `login` always runs `bcrypt.compare`, against
 a constant dummy hash when there's no matching user, so both cases cost the same.
 
+</details>
+
+
 ### Frontend
+
+<details>
+<summary>5 decisions — why the client is built this way</summary>
 
 **No state-management or data-fetching library** (no Redux/Zustand, no TanStack
 Query). Four pages of mostly-server data don't need one; a plain `fetch` wrapper
@@ -506,7 +496,13 @@ library to justify at this scale, it's keyboard-accessible, and it gives Playwri
 a deterministic interaction to drive — simulated drag gestures are one of the
 flakier things to automate reliably in browser test tools.
 
+</details>
+
+
 ### End-to-end (Playwright)
+
+<details>
+<summary>5 decisions — POM structure, locators, fixtures, cross-browser, baselines</summary>
 
 **POM classes, not raw locators in tests.** One class per page
 (`LoginPage`/`SignupPage`/`BoardsPage`/`BoardPage`), each exposing locators built
@@ -547,7 +543,13 @@ not a local approximation. Windows baselines stay alongside them for local
 dev on a Windows machine; Playwright's snapshot naming (`-win32` vs `-linux`
 suffix) keeps both without conflict.
 
+</details>
+
+
 ### Contract testing (Pact)
+
+<details>
+<summary>3 decisions — local pact files, scope, provider verification setup</summary>
 
 **Local pact files, not a Pact Broker.** A real production Pact workflow
 publishes contracts to a broker (versioning, webhook-triggered provider
@@ -575,7 +577,13 @@ excludes `tests/pact/**`, since Vitest's default file-discovery glob would
 otherwise also pick up `*.pact.test.ts` there and run it under the wrong
 assumptions (no server listening, no pact file passed to a `Verifier`).
 
+</details>
+
+
 ### Security tests
+
+<details>
+<summary>3 decisions — IDOR sweep, JWT tampering, rate-limit keying</summary>
 
 This is a deliberately narrow, explicitly-scoped set of checks — not a general
 "security testing" claim. Three things, matching what the ownership/collaborator
@@ -614,6 +622,9 @@ hook to test the exact boundary (10 allowed, 11th blocked) without
 interference from other files' login calls. Email-keyed, each test's distinct
 email gets an independent bucket — no reset hook needed.
 
+</details>
+
+
 ### Testing infrastructure
 
 **`mongodb-memory-server` for API tests**, not a shared/Docker Mongo instance:
@@ -624,6 +635,9 @@ it in-process. Pact provider verification reuses the same shared-mongod setup as
 the main API suite, since its state handlers need a real database to seed.
 
 ### Docker
+
+<details>
+<summary>4 decisions — multi-stage builds, workspace context, build args, CI usage</summary>
 
 **Multi-stage builds, running compiled output, not dev-mode tooling.**
 `packages/api/Dockerfile` runs `node dist/server.js`, not `tsx watch`;
@@ -654,7 +668,13 @@ dev and for running the finished app; CI's `docker` job only smoke-builds
 both Dockerfiles to prove they still work, and doesn't push or deploy them
 anywhere.
 
+</details>
+
+
 ### CI/CD (GitHub Actions)
+
+<details>
+<summary>job breakdown and how each one starts the app</summary>
 
 Five jobs, all running in parallel (no `needs:` between them):
 
@@ -681,7 +701,13 @@ runner) — `nohup npm start -w packages/api &` / `npm run preview -w
 packages/web &`, then a short polling loop against `/health` before the next
 step runs.
 
+</details>
+
+
 ### Security scanning (OWASP ZAP)
+
+<details>
+<summary>4 decisions — scope, issue-writing, fail behavior, what it found</summary>
 
 **A passive-only baseline scan**, not an active scan — matches the "narrow,
 explicitly-scoped" security claim already established by the Vitest security
@@ -712,9 +738,15 @@ scenarios (e.g. `SharedArrayBuffer`) this app doesn't use — and are left as
 known, understood follow-ups rather than chased to zero findings for its
 own sake.
 
+</details>
+
+
 ## Bugs found via testing
 
 ### 1. Mongo test infra crash (backend)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 While building out the List/Card test suite, the Vitest run started crashing with
 `Mongod internal error (fassert() failure)` once the suite reached 5 test files.
@@ -730,7 +762,13 @@ another file's in-progress test). At this suite's current size the sequential co
 is small; per-file databases within the one shared instance would be the next fix
 if the suite grows large enough for that to matter.
 
+</details>
+
+
 ### 2. Low-contrast error text from a CSS specificity collision (frontend)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 While manually verifying the login page's error state in a real browser (checking
 that a redesigned stylesheet hadn't broken anything), the "invalid credentials"
@@ -750,7 +788,13 @@ Fix: gave the hint text an explicit `.auth-hint` class instead of relying on
 that structural selectors scoped only by DOM position are fragile the moment a
 sibling with different intent gets added.
 
+</details>
+
+
 ### 3. A Playwright locator bug that looked exactly like an app bug (test code)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 While writing the move-card-between-lists E2E test, `expect(listColumn("To
 Do").getByTestId("card-item")).toHaveCount(0)` kept finding 1 card after a move
@@ -780,7 +824,13 @@ substring match against the whole subtree. `has` checks containment of one
 specific element; `hasText` checks the text of everything inside, including
 nested `<option>` labels that happen to be words the test is also searching for.
 
+</details>
+
+
 ### 4. `express-rate-limit` crashed on startup, but only under `NODE_ENV=production` (backend)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 The login rate limiter (see [Security tests](#security-tests)) worked fine
 in every local run and in the Vitest suite, then threw a `ValidationError`
@@ -803,7 +853,13 @@ Fix: wrap the fallback in `ipKeyGenerator(req.ip)`, per the library's own
 documented pattern. Confirmed clean startup afterward and reran the full
 Vitest suite (49/49) to confirm no regression.
 
+</details>
+
+
 ### 5. Session persistence broke in WebKit specifically, only against the container (backend/frontend boundary)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 Running the E2E suite against the newly-Dockerized app for the first time,
 one test failed in WebKit only: session persistence after a page reload.
@@ -827,7 +883,13 @@ var (false in `docker-compose.yml`, since this is plain HTTP) controls the
 cookie flag instead. Confirmed by rerunning the Playwright suite against the
 rebuilt containers — WebKit passed, all 18 tests green.
 
+</details>
+
+
 ### 6. ZAP baseline scan found real missing security headers (infra/frontend)
+
+<details>
+<summary>root cause and fix — click to expand</summary>
 
 The whole point of wiring up the ZAP scan (see
 [Security scanning](#security-scanning-owasp-zap)) is that it's supposed to
@@ -856,22 +918,13 @@ threat model SRI addresses doesn't really apply here. Documented that
 reasoning rather than adding a Vite plugin to silence a finding whose
 premise doesn't hold for this deployment shape.
 
-## Roadmap
+</details>
 
-- **Phase 2 — done**: Playwright E2E suite (POM structure, cross-browser, visual
-  regression); Pact consumer-driven contract test (auth endpoints only — see
-  [Design decisions](#contract-testing-pact)); IDOR/JWT-tampering/rate-limit
-  security tests added to the API suite (see
-  [Design decisions](#security-tests)).
-- **Phase 3 — done**: Docker + Docker Compose for the whole app (see
-  [Docker](#docker)); GitHub Actions CI with 5 parallel jobs (see
-  [CI/CD](#cicd-github-actions)); OWASP ZAP baseline scan wired in, its
-  findings actually fixed rather than just reported (see
-  [Security scanning](#security-scanning-owasp-zap) and
-  [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infrafrontend)).
 
-Everything from the original plan is built. Genuine next steps, not gaps in
-what was promised:
+## Possible next steps
+
+Everything from the original plan is built (see [Status](#status)) — these are
+extensions beyond that scope, not gaps in it:
 
 - A real **Pact Broker** (currently local pact files — see
   [Contract testing](#contract-testing-pact)) for versioning and
