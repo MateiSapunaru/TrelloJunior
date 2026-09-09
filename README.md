@@ -157,7 +157,9 @@ flakier things to automate reliably in browser test tools.
 **`mongodb-memory-server` for API tests**, not a shared/Docker Mongo instance:
 tests get an isolated, ephemeral database with no external service dependency.
 
-## A bug found via testing (infra, not app code)
+## Bugs found via testing
+
+### 1. Mongo test infra crash (backend)
 
 While building out the List/Card test suite, the Vitest run started crashing with
 `Mongod internal error (fassert() failure)` once the suite reached 5 test files.
@@ -172,6 +174,26 @@ run concurrently against it (one file's `afterEach` collection-wipe would race
 another file's in-progress test). At this suite's current size the sequential cost
 is small; per-file databases within the one shared instance would be the next fix
 if the suite grows large enough for that to matter.
+
+### 2. Low-contrast error text from a CSS specificity collision (frontend)
+
+While manually verifying the login page's error state in a real browser (checking
+that a redesigned stylesheet hadn't broken anything), the "invalid credentials"
+error rendered as barely-legible muted gray text on a pale pink background instead
+of the intended red — an accessibility/contrast bug that unit-level or snapshot
+testing wouldn't necessarily have caught, since the element was present with the
+right text, just visually wrong.
+
+Root cause: `.auth-page form > p` (meant to style the "Need an account? Sign up"
+hint line) is a *structural* selector — it matches every direct-child `<p>` of the
+form, which includes the error `<p role="alert">` too, since both are siblings
+inside the same `<form>`. Its specificity (`0,1,2`) beat the alert's own
+`[role="alert"]` rule (`0,1,0`), so the muted-gray hint-text color silently won.
+
+Fix: gave the hint text an explicit `.auth-hint` class instead of relying on
+`form > p` to distinguish it from other paragraphs in the form — a good reminder
+that structural selectors scoped only by DOM position are fragile the moment a
+sibling with different intent gets added.
 
 ## Roadmap
 
