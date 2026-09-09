@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
@@ -6,6 +6,12 @@ export default defineConfig({
     globals: false,
     globalSetup: ["./tests/globalSetup.ts"],
     setupFiles: ["./tests/setup.ts"],
+    // Pact provider verification (tests/pact/) has its own config (vitest.pact.config.mts,
+    // run via `npm run test:pact`) since it needs a real listening server, unlike this
+    // suite. Vitest's default include glob would otherwise also pick up *.pact.test.ts
+    // here, running it twice under different (and for this config, wrong) assumptions.
+    // Extends (not replaces) Vitest's own default exclude list.
+    exclude: [...configDefaults.exclude, "tests/pact/**"],
     testTimeout: 30_000,
     hookTimeout: 60_000,
     // All test files share one mongod instance and database (see globalSetup.ts). Running

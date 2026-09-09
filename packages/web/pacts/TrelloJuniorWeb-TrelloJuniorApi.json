@@ -1,0 +1,146 @@
+{
+  "consumer": {
+    "name": "TrelloJuniorWeb"
+  },
+  "interactions": [
+    {
+      "description": "a login request with credentials that don't match any account",
+      "request": {
+        "body": {
+          "email": "nobody@example.com",
+          "password": "whatever123"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/auth/login"
+      },
+      "response": {
+        "body": {
+          "error": "invalid credentials"
+        },
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "status": 401
+      }
+    },
+    {
+      "description": "a request for the current user with no session",
+      "request": {
+        "method": "GET",
+        "path": "/auth/me"
+      },
+      "response": {
+        "body": {
+          "error": "missing token"
+        },
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "status": 401
+      }
+    },
+    {
+      "description": "a signup request with a duplicate email",
+      "providerStates": [
+        {
+          "name": "a user with email dup@example.com already exists"
+        }
+      ],
+      "request": {
+        "body": {
+          "email": "dup@example.com",
+          "name": "Someone Else",
+          "password": "supersecret123"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/auth/signup"
+      },
+      "response": {
+        "body": {
+          "error": "email already in use"
+        },
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "status": 409
+      }
+    },
+    {
+      "description": "a signup request with a new email",
+      "request": {
+        "body": {
+          "email": "new@example.com",
+          "name": "New User",
+          "password": "supersecret123"
+        },
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "method": "POST",
+        "path": "/auth/signup"
+      },
+      "response": {
+        "body": {
+          "user": {
+            "email": "new@example.com",
+            "id": "64f1a2b3c4d5e6f7a8b9c0d1",
+            "name": "New User"
+          }
+        },
+        "headers": {
+          "Content-Type": "application/json; charset=utf-8"
+        },
+        "matchingRules": {
+          "body": {
+            "$.user.email": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.user.id": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.user.name": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "status": 201
+      }
+    }
+  ],
+  "metadata": {
+    "pact-js": {
+      "version": "17.1.4"
+    },
+    "pactRust": {
+      "ffi": "0.5.7",
+      "models": "1.3.15"
+    },
+    "pactSpecification": {
+      "version": "3.0.0"
+    }
+  },
+  "provider": {
+    "name": "TrelloJuniorApi"
+  }
+}

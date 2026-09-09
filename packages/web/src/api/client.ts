@@ -1,5 +1,3 @@
-const API_URL: string = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
-
 export class ApiError extends Error {
   status: number;
 
@@ -20,7 +18,11 @@ type RequestOptions = {
 // same site) - without it every request would look logged-out regardless of the
 // cookie set on login.
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
+  // Read lazily (not as a module-level const) so tests can point this at a
+  // different server per-test (e.g. a Pact mock provider) via vi.stubEnv,
+  // without needing a dynamic import to dodge a value captured at module load.
+  const apiUrl: string = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+  const res = await fetch(`${apiUrl}${path}`, {
     method: options.method ?? "GET",
     headers: options.body !== undefined ? { "Content-Type": "application/json" } : undefined,
     credentials: "include",
