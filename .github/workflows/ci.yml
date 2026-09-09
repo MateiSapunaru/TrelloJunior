@@ -93,6 +93,19 @@ jobs:
           name: playwright-report
           path: packages/e2e/playwright-report/
           retention-days: 14
+      # When a baseline doesn't exist yet, Playwright still writes the actual
+      # capture into tests/*-snapshots/ (and fails the assertion, correctly -
+      # CI should never silently accept a new baseline). Uploading it separately
+      # is what lets a human download and commit it as the real baseline
+      # afterward, rather than that image only ever existing on the runner.
+      - name: Upload visual snapshots (new or changed)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-snapshots
+          path: packages/e2e/tests/**/*.png
+          retention-days: 14
+          if-no-files-found: ignore
 
   # OWASP ZAP baseline scan: a passive-only DAST pass against the running app,
   # not a re-run of the Vitest security tests (those already live in the api
