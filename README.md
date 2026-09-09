@@ -15,10 +15,11 @@ demoed.
 
 **Day 1 complete**: API, auth, board ownership, frontend.
 **Day 2 in progress**: Playwright E2E (POM structure, API-bootstrapped auth
-fixture, cross-browser, visual regression) done; Pact contract test and
-IDOR/JWT/rate-limit security tests not started yet — see [Roadmap](#roadmap).
-MongoDB runs via Docker Compose (`npm run mongo:up`), pulled forward from Day 3
-since Playwright needs a real, persistent database to run against.
+fixture, cross-browser, visual regression) done; Pact contract test (auth
+endpoints) done; IDOR/JWT/rate-limit security tests not started yet — see
+[Roadmap](#roadmap). MongoDB runs via Docker Compose (`npm run mongo:up`),
+pulled forward from Day 3 since Playwright and Pact both need a real,
+persistent database to run against.
 
 ## Repo structure
 
@@ -197,13 +198,42 @@ operating systems that pixel-diff baselines aren't portable across them. This is
 a known, general limitation of screenshot-based visual regression, not specific
 to this setup.
 
+### Contract testing (Pact)
+
+**Local pact files, not a Pact Broker.** A real production Pact workflow
+publishes contracts to a broker (versioning, webhook-triggered provider
+verification, "can-i-deploy" gating). Running one is real infra/cost this
+project doesn't need to demonstrate the core idea: `packages/web`'s consumer
+test writes `packages/web/pacts/TrelloJuniorWeb-TrelloJuniorApi.json`, which is
+committed to the repo, and `packages/api`'s provider verification reads that
+same file by path. Same underlying mechanism (a written contract, checked from
+both sides), without hosting anything.
+
+**Only the auth endpoints are contracted (signup, login, session check) —
+board/list/card endpoints deliberately aren't yet.** Those require an
+authenticated session; contracting them needs Pact's provider-state and
+`requestFilter` pattern to inject a real session cookie into the replayed
+request (the pact file can't record a real one, since JWTs are signed
+per-user). Left out of this first pass to keep it correct and understandable
+rather than half-implemented — a natural next slice, not an oversight.
+
+**Provider verification is a separate Vitest config
+(`vitest.pact.config.mts`, run via `npm run test:pact`), not part of the main
+suite.** Pact's `Verifier` makes real HTTP requests, so it needs the Express app
+actually listening on a port — unlike the main suite, which imports `app`
+in-process via Supertest and never binds one. The main config explicitly
+excludes `tests/pact/**`, since Vitest's default file-discovery glob would
+otherwise also pick up `*.pact.test.ts` there and run it under the wrong
+assumptions (no server listening, no pact file passed to a `Verifier`).
+
 ### Testing infrastructure
 
 **`mongodb-memory-server` for API tests**, not a shared/Docker Mongo instance:
 tests get an isolated, ephemeral database with no external service dependency.
 E2E tests, by contrast, run against the real Docker-Composed MongoDB (`npm run
 mongo:up`), since Playwright drives the actual running app rather than importing
-it in-process.
+it in-process. Pact provider verification reuses the same shared-mongod setup as
+the main API suite, since its state handlers need a real database to seed.
 
 ## Bugs found via testing
 
@@ -275,9 +305,11 @@ nested `<option>` labels that happen to be words the test is also searching for.
 
 ## Roadmap
 
-- **Day 2**: Playwright E2E suite (POM structure, cross-browser, visual
-  regression), Pact consumer-driven contract test, IDOR/JWT-tampering/rate-limit
-  security tests added to the API suite.
+- **Day 2**: ~~Playwright E2E suite (POM structure, cross-browser, visual
+  regression)~~ done. ~~Pact consumer-driven contract test~~ done (auth
+  endpoints only — see [Design decisions](#contract-testing-pact)).
+  IDOR/JWT-tampering/rate-limit security tests added to the API suite — next up.
 - **Day 3**: OWASP ZAP baseline scan wired into CI (results as a build artifact),
   GitHub Actions with parallel UI/API/contract/security jobs, Docker + Docker
-  Compose (app + MongoDB).
+  Compose for the app itself (MongoDB is already containerized — see
+  [Running it locally](#running-it-locally)).
