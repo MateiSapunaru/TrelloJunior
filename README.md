@@ -300,8 +300,9 @@ for what it found and how it was fixed.
 
 ## Status
 
-The app, its test automation suite, and its delivery pipeline (Docker, CI, a
-security scan) are complete and verified on every push via the
+The app, its test automation suite, its Docker setup, and its CI pipeline
+(build, full test suite, and a security scan on every push) are complete
+and verified via the
 [Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions). See
 [Possible next steps](#possible-next-steps) for planned extensions.
 
@@ -366,7 +367,7 @@ Mongo-only container; `docker compose down` stops the full stack.
 | Docker images build | `docker build -f packages/api/Dockerfile .` / same for `packages/web/Dockerfile` | Docker |
 
 All of the above also run automatically on every push — see
-[CI/CD](#cicd-github-actions) and the
+[CI](#ci-github-actions) and the
 [Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions) for
 current results.
 
@@ -528,7 +529,7 @@ Firefox's Windows build needs the Microsoft Visual C++ Redistributable,
 which isn't installed on this dev machine, and installing a system package
 wasn't something to do inside a test-config decision. CI runs on a clean
 Linux runner with no such missing dependency, so all three engines run
-there via `PLAYWRIGHT_PROJECTS=all` (see [CI/CD](#cicd-github-actions)).
+there via `PLAYWRIGHT_PROJECTS=all` (see [CI](#ci-github-actions)).
 
 **Visual regression baselines are generated per-platform, by the
 environment that will actually compare against them.** Font rendering
@@ -673,7 +674,7 @@ deploy them anywhere.
 </details>
 
 
-### CI/CD (GitHub Actions)
+### CI (GitHub Actions)
 
 <details>
 <summary>job breakdown and how each one starts the app</summary>
@@ -932,7 +933,7 @@ premise doesn't hold for this deployment shape.
 
 ## Possible next steps
 
-The app and its full test/delivery pipeline are done (see [Status](#status)).
+The app, its full test suite, and its CI pipeline are done (see [Status](#status)).
 These are extensions beyond that scope:
 
 - A real **Pact Broker** (currently local pact files — see
@@ -943,5 +944,11 @@ These are extensions beyond that scope:
   cookie into the replayed request.
 - **Tightening the remaining ZAP findings** (`Cross-Origin-*-Policy` headers,
   a stricter per-directive CSP).
+- **Actual continuous deployment.** The `docker` job builds both images to
+  confirm they still work, but doesn't push them anywhere (see
+  [Docker](#docker)) — there's no registry, no hosting target, and nothing
+  gets deployed automatically. A real CD step would push tagged images to a
+  registry (e.g. GHCR) and deploy them to a hosting target on merge to
+  `master`.
 - A **branch-protection rule** requiring CI to pass before merge, once this
   repo has more than one contributor for that to matter.
