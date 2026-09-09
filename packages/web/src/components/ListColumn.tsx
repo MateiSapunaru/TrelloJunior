@@ -57,6 +57,7 @@ export function ListColumn({
         <h2>{list.title}</h2>
         <button
           onClick={() => void handleDeleteList()}
+          className="btn-icon"
           data-testid="delete-list-button"
           aria-label={`Delete list ${list.title}`}
         >

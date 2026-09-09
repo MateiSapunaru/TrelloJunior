@@ -27,6 +27,7 @@ export function LoginPage() {
 
   return (
     <main className="auth-page">
+      <span className="auth-logo">TrelloJunior</span>
       <form onSubmit={handleSubmit} data-testid="login-form">
         <h1>Log in</h1>
         {error && (
@@ -57,7 +58,7 @@ export function LoginPage() {
         <button type="submit" disabled={isSubmitting} data-testid="login-submit">
           Log in
         </button>
-        <p>
+        <p className="auth-hint">
           Need an account? <Link to="/signup">Sign up</Link>
         </p>
       </form>

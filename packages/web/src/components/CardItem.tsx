@@ -46,7 +46,12 @@ export function CardItem({ boardId, listId, card, otherLists, onDeleted, onMoved
     <li className="card-item" data-testid="card-item">
       <div className="card-item-row">
         <span>{card.title}</span>
-        <button onClick={() => void handleDelete()} data-testid="delete-card-button" aria-label={`Delete card ${card.title}`}>
+        <button
+          onClick={() => void handleDelete()}
+          className="btn-icon"
+          data-testid="delete-card-button"
+          aria-label={`Delete card ${card.title}`}
+        >
           ×
         </button>
       </div>

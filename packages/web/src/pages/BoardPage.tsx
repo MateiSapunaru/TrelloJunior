@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import * as boardsApi from "../api/boards";
 import * as cardsApi from "../api/cards";
 import { ApiError } from "../api/client";
 import * as listsApi from "../api/lists";
+import { AppHeader } from "../components/AppHeader";
 import { ListColumn } from "../components/ListColumn";
 import type { Board, Card, List } from "../types";
 
@@ -98,49 +99,51 @@ export function BoardPage() {
   if (!boardId) {
     return <p role="alert">Board not found.</p>;
   }
-  if (isLoading) {
-    return <p>Loading…</p>;
-  }
-  if (!board) {
-    return <p role="alert">{error ?? "Board not found."}</p>;
-  }
 
   return (
     <div className="board-page">
-      <header className="board-header">
-        <Link to="/boards">&larr; Boards</Link>
-        <h1>{board.title}</h1>
-      </header>
-      {error && <p role="alert">{error}</p>}
+      <AppHeader />
+      <main className="board-page-body">
+        {isLoading ? (
+          <p>Loading…</p>
+        ) : !board ? (
+          <p role="alert">{error ?? "Board not found."}</p>
+        ) : (
+          <>
+            <h1>{board.title}</h1>
+            {error && <p role="alert">{error}</p>}
 
-      <div className="board-columns">
-        {lists.map((list) => (
-          <ListColumn
-            key={list.id}
-            boardId={boardId}
-            list={list}
-            cards={cardsByListId[list.id] ?? []}
-            otherLists={lists.filter((l) => l.id !== list.id)}
-            onCardCreated={(card) => handleCardCreated(list.id, card)}
-            onCardDeleted={(cardId) => handleCardDeleted(list.id, cardId)}
-            onCardMoved={(toListId, card) => handleCardMoved(list.id, toListId, card)}
-            onListDeleted={() => handleListDeleted(list.id)}
-          />
-        ))}
+            <div className="board-columns">
+              {lists.map((list) => (
+                <ListColumn
+                  key={list.id}
+                  boardId={boardId}
+                  list={list}
+                  cards={cardsByListId[list.id] ?? []}
+                  otherLists={lists.filter((l) => l.id !== list.id)}
+                  onCardCreated={(card) => handleCardCreated(list.id, card)}
+                  onCardDeleted={(cardId) => handleCardDeleted(list.id, cardId)}
+                  onCardMoved={(toListId, card) => handleCardMoved(list.id, toListId, card)}
+                  onListDeleted={() => handleListDeleted(list.id)}
+                />
+              ))}
 
-        <form onSubmit={handleCreateList} className="add-list-form" data-testid="create-list-form">
-          <input
-            value={newListTitle}
-            onChange={(e) => setNewListTitle(e.target.value)}
-            placeholder="New list title"
-            data-testid="list-title-input"
-            required
-          />
-          <button type="submit" data-testid="create-list-submit">
-            Add list
-          </button>
-        </form>
-      </div>
+              <form onSubmit={handleCreateList} className="add-list-form" data-testid="create-list-form">
+                <input
+                  value={newListTitle}
+                  onChange={(e) => setNewListTitle(e.target.value)}
+                  placeholder="New list title"
+                  data-testid="list-title-input"
+                  required
+                />
+                <button type="submit" data-testid="create-list-submit">
+                  Add list
+                </button>
+              </form>
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 }
