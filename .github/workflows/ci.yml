@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  # Functional + security tests (Vitest/Supertest). No Mongo service needed here -
+  # this suite starts its own throwaway mongod via mongodb-memory-server
+  # (tests/globalSetup.ts), same as running it locally.
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # mongodb-memory-server downloads a real mongod binary (~700MB) on first
+      # use - caching it is the difference between this job taking a couple of
+      # minutes and it taking a couple of minutes plus a large one-time download
+      # on every single run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}
+      - run: npm ci
+      - run: npm test -w packages/api
+
+  # Pact: consumer test generates the contract, provider verification replays it
+  # against the real Express app. Both run in this one job since the provider
+  # step needs the file the consumer step just wrote - splitting them across
+  # parallel jobs would just add an artifact hand-off for no benefit.
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}
+      - run: npm ci
+      - run: npm run test:pact -w packages/web
+      - run: npm run test:pact -w packages/api
+
+  # Playwright E2E. Needs the real app actually running, so unlike the api job
+  # this needs a real MongoDB - a GitHub Actions service container, not
+  # docker-compose (a test runner shouldn't orchestrate Docker itself; see the
+  # README for the same reasoning applied to local dev).
+  ui:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URI: mongodb://localhost:27017/trellojunior
+      JWT_SECRET: ci-test-secret
+      CORS_ORIGIN: http://localhost:5173
+      PORT: "4000"
+      VITE_API_URL: http://localhost:4000
+      # Chromium + WebKit run locally too; Firefox is added here specifically -
+      # excluded locally only because this dev machine is missing a Windows
+      # system dependency (Visual C++ Redistributable) that a clean Linux
+      # runner doesn't need.
+      PLAYWRIGHT_PROJECTS: all
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright browsers
+        working-directory: packages/e2e
+        run: npx playwright install --with-deps
+      - name: Run Playwright tests
+        working-directory: packages/e2e
+        run: npx playwright test
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: packages/e2e/playwright-report/
+          retention-days: 14
+
+  # OWASP ZAP baseline scan: a passive-only DAST pass against the running app,
+  # not a re-run of the Vitest security tests (those already live in the api
+  # job and test unit/functional-level authz/JWT/rate-limit behavior - this is
+  # a genuinely different kind of check).
+  security:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URI: mongodb://localhost:27017/trellojunior
+      JWT_SECRET: ci-test-secret
+      CORS_ORIGIN: http://localhost:5173
+      PORT: "4000"
+      VITE_API_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w packages/api
+      - run: npm run build -w packages/web
+      - name: Start the app in the background
+        run: |
+          nohup npm start -w packages/api > api.log 2>&1 &
+          nohup npm run preview -w packages/web -- --port 5173 --host 0.0.0.0 > web.log 2>&1 &
+      - name: Wait for the app to respond
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health > /dev/null && curl -sf http://localhost:5173 > /dev/null; then
+              echo "app is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app did not become ready in time"
+          cat api.log web.log
+          exit 1
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          target: "http://localhost:5173"
+          # This is the actual deliverable (a build artifact the action uploads
+          # itself) - not a GitHub issue opened on every run, which is the
+          # action's default and not something a scheduled/on-push scan should
+          # do unprompted.
+          allow_issue_writing: false
+          # Baseline findings are informational by default at this scope (see
+          # README) - the report is the deliverable, not a hard merge gate.
+          fail_action: false
+          artifact_name: zap-baseline-report
+
+  # Smoke-checks that both Dockerfiles actually build - doesn't push anywhere or
+  # use these images to power the other jobs (see README for why CI uses native
+  # service containers instead of docker-compose to run the test jobs).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f packages/api/Dockerfile -t trellojunior-api .
+      - run: docker build -f packages/web/Dockerfile -t trellojunior-web .
