@@ -1,11 +1,11 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { AUTH_COOKIE_NAME } from "../lib/authCookie";
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const header = req.header("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  const token: unknown = req.cookies?.[AUTH_COOKIE_NAME];
 
-  if (!token) {
+  if (typeof token !== "string") {
     res.status(401).json({ error: "missing token" });
     return;
   }

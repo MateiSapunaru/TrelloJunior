@@ -4,17 +4,22 @@ import app from "../src/app";
 import User from "../src/models/User";
 
 describe("POST /auth/signup", () => {
-  it("creates a user and returns a token", async () => {
-    const res = await request(app).post("/auth/signup").send({
+  it("creates a user and sets an auth cookie that /auth/me accepts", async () => {
+    const agent = request.agent(app);
+    const signupRes = await agent.post("/auth/signup").send({
       email: "matei@example.com",
       password: "supersecret123",
       name: "Matei",
     });
 
-    expect(res.status).toBe(201);
-    expect(res.body.token).toEqual(expect.any(String));
-    expect(res.body.user).toMatchObject({ email: "matei@example.com", name: "Matei" });
-    expect(res.body.user.passwordHash).toBeUndefined();
+    expect(signupRes.status).toBe(201);
+    expect(signupRes.body.user).toMatchObject({ email: "matei@example.com", name: "Matei" });
+    expect(signupRes.body.token).toBeUndefined();
+    expect(signupRes.body.user.passwordHash).toBeUndefined();
+
+    const meRes = await agent.get("/auth/me");
+    expect(meRes.status).toBe(200);
+    expect(meRes.body.user).toMatchObject({ email: "matei@example.com" });
   });
 
   it("rejects a duplicate email", async () => {
@@ -49,14 +54,18 @@ describe("POST /auth/login", () => {
     });
   });
 
-  it("logs in with correct credentials", async () => {
-    const res = await request(app).post("/auth/login").send({
+  it("logs in, and the resulting cookie authenticates subsequent requests", async () => {
+    const agent = request.agent(app);
+    const loginRes = await agent.post("/auth/login").send({
       email: "login@example.com",
       password: "correcthorse",
     });
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.token).toBeUndefined();
 
-    expect(res.status).toBe(200);
-    expect(res.body.token).toEqual(expect.any(String));
+    const meRes = await agent.get("/auth/me");
+    expect(meRes.status).toBe(200);
+    expect(meRes.body.user.email).toBe("login@example.com");
   });
 
   it("returns the same error for a wrong password and a nonexistent user", async () => {
@@ -72,5 +81,30 @@ describe("POST /auth/login", () => {
     expect(wrongPassword.status).toBe(401);
     expect(noSuchUser.status).toBe(401);
     expect(wrongPassword.body.error).toBe(noSuchUser.body.error);
+  });
+});
+
+describe("GET /auth/me", () => {
+  it("returns 401 when there is no auth cookie", async () => {
+    const res = await request(app).get("/auth/me");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /auth/logout", () => {
+  it("clears the auth cookie so /auth/me stops working afterward", async () => {
+    const agent = request.agent(app);
+    await agent.post("/auth/signup").send({
+      email: "logout@example.com",
+      password: "supersecret123",
+      name: "Logout",
+    });
+    expect((await agent.get("/auth/me")).status).toBe(200);
+
+    const logoutRes = await agent.post("/auth/logout");
+    expect(logoutRes.status).toBe(204);
+
+    const meRes = await agent.get("/auth/me");
+    expect(meRes.status).toBe(401);
   });
 });
