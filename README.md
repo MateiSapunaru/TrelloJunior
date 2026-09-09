@@ -4,10 +4,10 @@
 
 A Trello-style kanban board app: an Express + MongoDB API and a React frontend
 with JWT auth, board ownership, and collaborators. It's paired with a full QA
-automation suite around it: 49 API-level tests, a 27-scenario cross-browser
-E2E suite with visual regression, a consumer-driven contract test, a security
-test suite (IDOR, JWT tampering, rate limiting), and a DAST scan, all wired
-into CI.
+automation suite around it: 49 API-level tests, a cross-browser E2E suite
+(9 scenarios, 3 engines in CI) with visual regression, a consumer-driven
+contract test, a security test suite (IDOR, JWT tampering, rate limiting),
+and a DAST scan, all wired into CI.
 
 ## Contents
 
