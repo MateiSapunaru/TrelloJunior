@@ -14,9 +14,10 @@ demoed.
 ## Status
 
 **Day 1 complete**: API, auth, board ownership, frontend.
-**Day 2 in progress**: Playwright E2E (POM structure, API-bootstrapped auth
-fixture, cross-browser, visual regression) done; Pact contract test (auth
-endpoints) done; IDOR/JWT/rate-limit security tests not started yet — see
+**Day 2 complete**: Playwright E2E (POM structure, API-bootstrapped auth
+fixture, cross-browser, visual regression), Pact contract test (auth
+endpoints), and a security test suite (IDOR route sweep, JWT tampering,
+email-keyed login rate limiting). **Day 3 not started** — see
 [Roadmap](#roadmap). MongoDB runs via Docker Compose (`npm run mongo:up`),
 pulled forward from Day 3 since Playwright and Pact both need a real,
 persistent database to run against.
@@ -226,6 +227,43 @@ excludes `tests/pact/**`, since Vitest's default file-discovery glob would
 otherwise also pick up `*.pact.test.ts` there and run it under the wrong
 assumptions (no server listening, no pact file passed to a `Verifier`).
 
+### Security tests
+
+This is a deliberately narrow, explicitly-scoped set of checks — not a general
+"security testing" claim. Three things, matching what the ownership/collaborator
+model and cookie-based auth actually create as surface area:
+
+**IDOR via a table-driven route sweep, not a copy of the functional tests.**
+`tests/security/idor.test.ts` enumerates all 13 board/list/card routes in one
+table and confirms a user with zero relationship to a board gets 404 on every
+one of them. The authorization checks already inline in
+`boards`/`lists`/`cards.test.ts` prove each endpoint behaves correctly as part
+of testing its normal CRUD behavior — this file's job is different: prove
+*every* route enforces the rule, by enumerating them instead of trusting each
+one was remembered individually when it was written.
+
+**JWT tampering covers the token, not just "logged in or not."**
+`tests/security/jwt-tampering.test.ts`: no cookie, a token forged with the
+wrong signing secret, an expired token, a token whose payload was altered
+after signing (signature no longer matches), a garbage string that isn't a JWT
+at all, and — a regression check tied to the httpOnly-cookie migration — a
+*valid* token sent via an `Authorization` header instead of the cookie is
+still rejected, proving there's no leftover bearer-token fallback that would
+partly undo the point of moving off `localStorage`.
+
+**Login rate limiting is keyed by the attempted email, not the caller's IP.**
+The threat this defends against is repeated password guesses against *one
+account* — keying by email means that stays true no matter how many IPs the
+attempt is spread across, which a naive per-IP limiter wouldn't catch. The
+trade-off: it doesn't limit one IP spraying many different emails (account
+enumeration), a different attack, out of scope for this pass. Keying by email
+also solved a test-design problem for free: since `express-rate-limit`'s store
+is shared process-wide and every test in this sequential suite hits the same
+singleton Express app, an IP-keyed limiter would need a manual store-reset
+hook to test the exact boundary (10 allowed, 11th blocked) without
+interference from other files' login calls. Email-keyed, each test's distinct
+email gets an independent bucket — no reset hook needed.
+
 ### Testing infrastructure
 
 **`mongodb-memory-server` for API tests**, not a shared/Docker Mongo instance:
@@ -305,10 +343,11 @@ nested `<option>` labels that happen to be words the test is also searching for.
 
 ## Roadmap
 
-- **Day 2**: ~~Playwright E2E suite (POM structure, cross-browser, visual
-  regression)~~ done. ~~Pact consumer-driven contract test~~ done (auth
-  endpoints only — see [Design decisions](#contract-testing-pact)).
-  IDOR/JWT-tampering/rate-limit security tests added to the API suite — next up.
+- **Day 2 — done**: Playwright E2E suite (POM structure, cross-browser, visual
+  regression); Pact consumer-driven contract test (auth endpoints only — see
+  [Design decisions](#contract-testing-pact)); IDOR/JWT-tampering/rate-limit
+  security tests added to the API suite (see
+  [Design decisions](#security-tests)).
 - **Day 3**: OWASP ZAP baseline scan wired into CI (results as a build artifact),
   GitHub Actions with parallel UI/API/contract/security jobs, Docker + Docker
   Compose for the app itself (MongoDB is already containerized — see
