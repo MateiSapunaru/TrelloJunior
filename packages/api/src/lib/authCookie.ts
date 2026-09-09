@@ -10,10 +10,16 @@ export const TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 function cookieOptions() {
   return {
     httpOnly: true,
-    // false in local dev (plain http://localhost) — a browser silently refuses to
-    // store a `secure` cookie over http, which would make login look like it
-    // succeeded (200 response) while auth quietly never persisted.
-    secure: process.env.NODE_ENV === "production",
+    // A dedicated flag, not `NODE_ENV === "production"`: those are different
+    // questions. NODE_ENV says "run the optimized/compiled build"; this says
+    // "is this deployment actually reachable over HTTPS". Conflating them broke
+    // session persistence in WebKit when the Docker Compose setup (a real
+    // production build, NODE_ENV=production, but served over plain HTTP
+    // locally) set secure:true — Chromium tolerates a Secure cookie on
+    // localhost over HTTP, WebKit correctly refuses to store one at all, so
+    // login looked like it succeeded but the session vanished on reload.
+    // Set COOKIE_SECURE=true only for a deployment that actually terminates TLS.
+    secure: process.env.COOKIE_SECURE === "true",
     // "strict" is enough CSRF protection here: this app has no cross-site login
     // redirect or third-party embed flow that strict mode would break, and it
     // blocks the cookie from being attached to any request that originates from

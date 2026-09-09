@@ -1,6 +1,5 @@
-# Mongo-only for now, for local dev and Playwright E2E - no auth, since this is
-# strictly local and never exposed. Containerizing the API/web apps themselves,
-# with a proper multi-service compose file, is Day 3 scope.
+# Full stack: mongo + api + web, all containerized. Mongo has no auth since this
+# never leaves the local Docker network / host-mapped port.
 services:
   mongo:
     image: mongo:7
@@ -10,6 +9,44 @@ services:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
+
+  api:
+    build:
+      context: .
+      dockerfile: packages/api/Dockerfile
+    container_name: trellojunior-api
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      # "mongo", not "localhost" - containers on this compose network reach each
+      # other by service name.
+      MONGO_URI: mongodb://mongo:27017/trellojunior
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-not-for-production}
+      # Must match wherever the *browser* reaches the web container (its
+      # host-mapped port below), not an internal Docker hostname.
+      CORS_ORIGIN: http://localhost:5173
+      # This stack is served over plain HTTP on localhost - a Secure cookie
+      # wouldn't persist (WebKit refuses to store one at all over HTTP; this
+      # broke session-persistence-after-reload before COOKIE_SECURE existed).
+      # Only ever "true" for a deployment that actually terminates TLS.
+      COOKIE_SECURE: "false"
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+      args:
+        VITE_API_URL: http://localhost:4000
+    container_name: trellojunior-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
 
 volumes:
   mongo-data:

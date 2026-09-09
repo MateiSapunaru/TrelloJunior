@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+**/.env
+.git
+packages/e2e/test-results
+packages/e2e/playwright-report
+packages/api/tests
+packages/web/tests

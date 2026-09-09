@@ -1,4 +1,4 @@
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 
 // Brute-force protection on login: 10 attempts per targeted email per 15-minute
 // window, counting every attempt regardless of outcome (skipSuccessfulRequests
@@ -19,5 +19,16 @@ export const loginRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "too many login attempts, please try again later" },
-  keyGenerator: (req) => (typeof req.body?.email === "string" ? req.body.email.toLowerCase() : (req.ip ?? "unknown")),
+  keyGenerator: (req) => {
+    if (typeof req.body?.email === "string") {
+      return req.body.email.toLowerCase();
+    }
+    // Fallback for the case email is missing entirely (validated by the route
+    // handler afterward, so this request 400s anyway - but the limiter still
+    // needs *some* key to count it under). ipKeyGenerator, not raw req.ip:
+    // a client can trivially rotate through many IPv6 addresses within their
+    // own /64 subnet, so keying on the exact address would let them bypass
+    // the limit; this normalizes to the subnet instead.
+    return ipKeyGenerator(req.ip ?? "unknown");
+  },
 });
