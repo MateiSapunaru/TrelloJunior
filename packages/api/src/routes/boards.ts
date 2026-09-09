@@ -1,42 +1,16 @@
-import { Router, type Request } from "express";
-import { Types, type HydratedDocument } from "mongoose";
+import { Router } from "express";
+import type { HydratedDocument } from "mongoose";
+import { findVisibleBoard, isOwner } from "../lib/boardAccess";
+import { getUserId } from "../lib/requestContext";
 import { requireAuth } from "../middleware/auth";
 import Board, { type BoardDoc } from "../models/Board";
+import Card from "../models/Card";
+import List from "../models/List";
 import User from "../models/User";
 
 const router = Router();
 
 router.use(requireAuth);
-
-function getUserId(req: Request): string {
-  if (!req.userId) {
-    throw new Error("requireAuth middleware did not run before this route");
-  }
-  return req.userId;
-}
-
-function hasAccess(board: BoardDoc, userId: string): boolean {
-  return board.ownerId.toString() === userId || board.collaboratorIds.some((id) => id.toString() === userId);
-}
-
-function isOwner(board: BoardDoc, userId: string): boolean {
-  return board.ownerId.toString() === userId;
-}
-
-// Returns the board only if the caller is its owner or a collaborator; otherwise null.
-// A caller with no relationship to the board gets the same "not found" result whether
-// the id is malformed, unused, or belongs to someone else entirely — that indistinguishability
-// is what stops an IDOR probe from even confirming a board id exists.
-async function findVisibleBoard(id: string, userId: string): Promise<HydratedDocument<BoardDoc> | null> {
-  if (!Types.ObjectId.isValid(id)) {
-    return null;
-  }
-  const board = await Board.findById(id);
-  if (!board || !hasAccess(board, userId)) {
-    return null;
-  }
-  return board;
-}
 
 function serializeBoard(board: HydratedDocument<BoardDoc>) {
   return {
@@ -113,6 +87,10 @@ router.delete("/:id", async (req, res) => {
     return;
   }
 
+  // Cascade delete: without this, deleting a board leaves orphaned List/Card
+  // documents referencing a boardId that no longer resolves to anything.
+  await Card.deleteMany({ boardId: board._id });
+  await List.deleteMany({ boardId: board._id });
   await board.deleteOne();
   res.status(204).send();
 });
