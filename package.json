@@ -4,5 +4,10 @@
   "version": "0.0.1",
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "scripts": {
+    "mongo:up": "docker compose up -d mongo",
+    "mongo:down": "docker compose down",
+    "mongo:logs": "docker compose logs -f mongo"
+  }
 }

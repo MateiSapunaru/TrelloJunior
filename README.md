@@ -32,22 +32,30 @@ tooling weight at this scale.
 
 ## Running it locally
 
-Prerequisites: Node 24+, a MongoDB instance (local `mongod`, Docker, or
-`mongodb-memory-server` for throwaway dev use — see below).
+Prerequisites: Node 24+, Docker Desktop.
 
 ```bash
 npm install
-cp packages/api/.env.example packages/api/.env      # fill in MONGO_URI at minimum
+npm run mongo:up                                     # starts MongoDB in Docker (:27017)
+cp packages/api/.env.example packages/api/.env
 cp packages/web/.env.example packages/web/.env
 npm run dev -w packages/api                          # :4000
 npm run dev -w packages/web                           # :5173
 ```
 
 `packages/api/.env` and `packages/web/.env` are gitignored — they hold local dev
-secrets/config, never committed.
+secrets/config, never committed. `npm run mongo:down` stops the container;
+`docker-compose.yml` only defines MongoDB for now — containerizing the API/web
+apps themselves is Day 3 scope, once there's a Dockerfile per app to write.
 
-Docker Compose (app + MongoDB, so no local Mongo install is needed) is planned for
-Day 3, not built yet.
+**Why Mongo got containerized now, ahead of the original Day 3 plan:** Playwright
+(Day 2) drives the actual running app end-to-end — unlike Vitest, which imports
+Express in-process and needs no real server — so it needs a real, stable MongoDB
+to point at. A hand-rolled `mongodb-memory-server` script (what Day 1's browser
+verification used, since it's throwaway and disposable) isn't something you can
+rely on being up between sessions. A single-service `docker-compose.yml` is the
+smallest real fix, and it's the same tool Day 3 was already committed to — not a
+new dependency, just used a day earlier than planned.
 
 ## Design decisions
 

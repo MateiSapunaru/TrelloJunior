@@ -1,0 +1,15 @@
+# Mongo-only for now, for local dev and Playwright E2E - no auth, since this is
+# strictly local and never exposed. Containerizing the API/web apps themselves,
+# with a proper multi-service compose file, is Day 3 scope.
+services:
+  mongo:
+    image: mongo:7
+    container_name: trellojunior-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+volumes:
+  mongo-data:
