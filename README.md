@@ -2,43 +2,363 @@
 
 [![CI](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml/badge.svg)](https://github.com/MateiSapunaru/TrelloJunior/actions/workflows/ci.yml)
 
-A Trello-style task/kanban board app, built as the target application for a layered
-QA automation portfolio suite. The app itself (Express + MongoDB API, React
-frontend, JWT auth with board ownership/collaborators) is the *means*; the point of
-the project is the test automation built around it — functional API tests, E2E UI
-tests, a consumer-driven contract test, and a narrow, explicitly-scoped security
-test suite (IDOR, JWT tampering, rate limiting).
+A Trello-style kanban board app, built as the target application for a layered QA
+automation portfolio. The app itself (Express + MongoDB API, React frontend, JWT
+auth with board ownership/collaborators) is the *means*; the point of this repo is
+the test automation built around it — 49 API-level tests, a 27-scenario
+cross-browser E2E suite with visual regression, a consumer-driven contract test,
+a narrow security test suite (IDOR, JWT tampering, rate limiting), and a DAST
+scan wired into CI.
 
-This README is written as we go, and documents *why* things are built the way they
-are — not just how to run them — so every choice here can be defended, not just
-demoed.
+This README documents *why* things are built the way they are, not just how to
+run them, and is written to be defended in an interview, not just skimmed. If a
+decision looks arguable, the reasoning for it is somewhere below — not left
+implicit.
+
+## Contents
+
+- [Testing strategy](#testing-strategy)
+- [Test suite reference](#test-suite-reference)
+- [Status](#status)
+- [Repo structure](#repo-structure)
+- [Running it locally](#running-it-locally)
+- [Running the tests](#running-the-tests)
+- [Design decisions](#design-decisions)
+- [Bugs found via testing](#bugs-found-via-testing)
+- [Roadmap](#roadmap)
+
+## Testing strategy
+
+The app is intentionally small — a handful of resources, one auth model. The
+test automation around it isn't small because the app is complex; it's built at
+this depth to demonstrate how a QA engineer would actually approach a real
+system: layered by cost and confidence, risk-based rather than exhaustive, and
+proven — not asserted — with real, documented bugs each layer caught.
+
+### The pyramid, and why each layer is shaped the way it is
+
+| Layer | Tool | Speed | What it actually catches |
+| --- | --- | --- | --- |
+| Functional / API | Vitest + Supertest | ~20s for 49 tests, no browser, no network | Business logic, authorization rules, validation — the foundation, run in-process against the real Express app |
+| Contract | Pact | ~1s consumer, ~4s provider | The frontend and backend silently drifting apart — a response shape neither side's own tests would catch changing, because each side only tests itself |
+| End-to-end | Playwright | ~8s locally (2 engines), ~25s in CI (3 engines) | Whether a real user, in a real browser, can actually complete a real journey — the API being "correct" doesn't guarantee the UI wires it up right |
+| Security (functional) | Vitest + Supertest | Same suite as functional, seconds | IDOR, JWT forgery/tampering, brute-force — attacker-shaped requests, not user-shaped ones |
+| Security (DAST) | OWASP ZAP | ~1.5 min in CI | What only a *running* app reveals — response headers, real HTTP behavior — that no amount of unit-level assertion would surface |
+
+This is a standard pyramid shape for a reason: the API layer is fast and cheap
+enough to run dozens of times and assert business logic precisely, so most of
+the volume lives there (49 of the repo's ~85 automated checks). E2E is
+slower and more expensive to write and maintain, so it's reserved for what only
+a real browser can prove — a handful of complete journeys, not every
+permutation the API layer already covers. Security testing is split the same
+way: functional-level security tests (fast, precise, run on every push) plus a
+DAST scan (slower, broader, catches an entirely different class of issue) —
+neither replaces the other.
+
+### Risk-based, not a generic checklist
+
+The security tests exist because of *this app's* actual attack surface, not
+because "IDOR/JWT/rate-limiting" is a standard list to tick off:
+
+- This app's core feature is **shared ownership** (boards have an owner and
+  collaborators) — so the biggest risk is a user reaching data they don't own.
+  That's why IDOR gets a dedicated, systematic route sweep (see below), not
+  just a couple of spot checks.
+- Auth is **JWT-in-an-httpOnly-cookie** — so the risks that matter are token
+  forgery, tampering, and expiry, and specifically whether the httpOnly-cookie
+  migration actually closed off the old bearer-token path (it did — there's a
+  regression test for exactly that).
+- The one endpoint that's meaningfully **brute-forceable** is login — so
+  that's the one endpoint with rate limiting and a test proving the exact
+  boundary, not a blanket rate limiter applied everywhere "just in case."
+
+### Defense in depth: authorization is tested at three different altitudes
+
+The same rule — "you can't touch a board you have no relationship to" — is
+verified three separate ways, deliberately, because each layer would catch a
+different way that rule could break:
+
+1. **Inline in the functional tests** (`boards.test.ts`, `lists.test.ts`,
+   `cards.test.ts`) — does *this specific endpoint* behave correctly, as part
+   of proving its normal CRUD behavior end to end (right status code, right
+   body, right side effects).
+2. **A systematic sweep** (`tests/security/idor.test.ts`) — does *every*
+   board/list/card route enforce it, by enumerating all 13 of them in one
+   table instead of trusting each one was remembered individually when it was
+   written. This is the layer that would catch "someone added a 14th route
+   and forgot the auth middleware" — a class of bug the inline tests
+   structurally can't catch, since they only know about the routes someone
+   thought to write a test for.
+3. **A real browser** (`tests/e2e/auth.spec.ts`) — does a user who isn't
+   logged in actually get redirected, and does a logged-out session actually
+   lose access after logout — proving the *whole stack* (React Router guard →
+   fetch with cookie → Express middleware → Mongo query) behaves correctly
+   together, not just each piece in isolation.
+
+### Test hygiene: independence and isolation
+
+Every test — API, security, contract, E2E — creates its own fresh data (a
+uniquely-emailed user, sometimes a board/list/card built from that user) rather
+than relying on seeded fixtures or a fixed test account. Two consequences worth
+calling out explicitly, because they're the kind of thing that's easy to get
+wrong and expensive to debug later:
+
+- **No test depends on run order or another test's leftover state.** The API
+  suite still resets the database between tests (`afterEach` in
+  `tests/setup.ts`) as a second layer of isolation, but the *design* doesn't
+  rely on that reset to be correct — each test would still be independent
+  without it.
+- **The login rate-limit test needed this reasoning explicitly** — see
+  [Security tests](#security-tests) below for why keying the limiter by email
+  rather than IP was the design choice that made "verify the exact boundary
+  (10 allowed, 11th blocked)" possible without a manual reset hook, in a
+  suite where every test shares one process and one Express app instance.
+
+### Evidence, not a claim
+
+None of the above is theoretical. [Bugs found via testing](#bugs-found-via-testing)
+documents six real, specific bugs this test suite caught — a Mongo test-infra
+crash, an accessibility contrast bug, a Playwright locator bug, an IPv6
+rate-limiter validation failure that only surfaced in a production build, a
+WebKit-specific session bug that only surfaced against a real container, and
+real missing-security-headers findings from the ZAP scan that got fixed, not
+just logged. Each one includes the actual root cause and the actual fix — the
+kind of debugging trail an interviewer can ask follow-up questions about.
+
+## Test suite reference
+
+What's actually being verified, layer by layer. Every test title below is the
+literal test name in the repo — nothing paraphrased or rounded up.
+
+### API functional tests — `packages/api/tests/*.test.ts` (25 tests)
+
+Vitest + Supertest, importing the Express app in-process (no real network
+listener) against a throwaway `mongodb-memory-server` instance.
+
+<details>
+<summary><strong>auth.test.ts</strong> — 7 tests: signup, login, session check, logout</summary>
+
+- `POST /auth/signup`
+  - creates a user and sets an auth cookie that `/auth/me` accepts
+  - rejects a duplicate email
+  - rejects a password under the minimum length
+- `POST /auth/login`
+  - logs in, and the resulting cookie authenticates subsequent requests
+  - returns the same error for a wrong password and a nonexistent user
+    (user-enumeration resistance — see [Design decisions](#backend))
+- `GET /auth/me`
+  - returns 401 when there is no auth cookie
+- `POST /auth/logout`
+  - clears the auth cookie so `/auth/me` stops working afterward
+
+</details>
+
+<details>
+<summary><strong>boards.test.ts</strong> — 8 tests: ownership, collaborators, the 404-vs-403 split</summary>
+
+- rejects unauthenticated requests
+- lets the owner read and list their board
+- returns 404, not 403, for a user with no relationship to the board (IDOR)
+- returns 404 for PATCH/DELETE attempts by a stranger too
+- lets the owner add a collaborator, who can then read the board
+- lets a collaborator read but not edit or delete the board (403, since they
+  can see it exists)
+- prevents a non-owner collaborator from adding new collaborators
+- deletes the board as owner, then 404s on subsequent access
+
+</details>
+
+<details>
+<summary><strong>lists.test.ts</strong> — 4 tests: collaborator permissions, ordering, cascade delete</summary>
+
+- lets a collaborator (not just the owner) create and read lists
+- assigns increasing positions to new lists
+- returns 404 for a stranger with no access to the board
+- deletes a list and cascades to its cards
+
+</details>
+
+<details>
+<summary><strong>cards.test.ts</strong> — 5 tests: CRUD, cross-board move guard</summary>
+
+- creates a card and lists it under its list
+- returns 404 for a stranger, even with a valid card id on someone else's
+  board
+- moves a card to another list on the same board
+- refuses to move a card into a list that belongs to a different board (the
+  cross-board move guard — see [Design decisions](#backend))
+- deletes a card
+
+</details>
+
+<details>
+<summary><strong>health.test.ts</strong> — 1 test: liveness</summary>
+
+- `GET /health` returns 200 and status ok
+
+</details>
+
+### Security tests — `packages/api/tests/security/*.test.ts` (24 tests)
+
+Same Vitest/Supertest infrastructure as the functional suite — these are
+attacker-shaped requests against the same real app, not a separate tool.
+
+<details open>
+<summary><strong>idor.test.ts</strong> — 15 tests: a systematic route sweep, not spot checks</summary>
+
+`it.each` over all 13 board/list/card routes, each asserting a stranger (a
+user with zero relationship to the board) gets **404**:
+
+`get`/`rename`/`delete` a board · `add a collaborator` · `list`/`create` a
+board's lists · `rename`/`delete` a list · `list`/`create` a list's cards ·
+`get`/`edit`/`delete` a card
+
+Plus two targeted cases:
+- returns 404, not a 500, for a malformed board id (not a valid ObjectId) —
+  proves the `Types.ObjectId.isValid()` guard actually works, not just that
+  invalid input is rejected somehow
+- returns 403, not 404, for a collaborator without owner-only permission —
+  the direct contrast case for the sweep above: a collaborator *can* see the
+  board exists, so hiding it would be inconsistent (see
+  [Design decisions](#backend))
+
+</details>
+
+<details>
+<summary><strong>jwt-tampering.test.ts</strong> — 6 tests: the token itself, not just "logged in or not"</summary>
+
+- rejects a request with no cookie at all
+- rejects a token signed with the wrong secret (a forged token)
+- rejects an expired token
+- rejects a token whose payload was altered after signing (signature no
+  longer matches)
+- rejects a garbage token string that isn't a JWT at all
+- ignores a valid token sent via `Authorization` header instead of the
+  cookie — a regression test tied to the httpOnly-cookie migration, proving
+  there's no leftover bearer-token fallback that would partly undo the point
+  of moving off `localStorage`
+
+</details>
+
+<details>
+<summary><strong>rate-limit.test.ts</strong> — 3 tests: the exact boundary, and what it's scoped to</summary>
+
+- blocks further login attempts against one account after 10 in the current
+  window (the exact configured boundary — 10 allowed, 11th blocked)
+- rate-limits per targeted account, not globally — a different email is
+  unaffected (proves the email-keyed design actually isolates accounts, not
+  just that *a* limit exists)
+- does not rate-limit signup — only login is brute-forceable in a way that
+  matters (proves the limiter is scoped correctly, not applied blanket)
+
+</details>
+
+### Contract tests — Pact (4 interactions, verified from both sides)
+
+Consumer (`packages/web/tests/pact/auth.pact.test.ts`) describes what the
+frontend expects; provider (`packages/api/tests/pact/verify.pact.test.ts`)
+replays those exact interactions against the real running Express app.
+
+- returns the created user on a successful signup
+- rejects a signup with an email that's already registered (a Pact
+  *provider state* — the provider verification step creates that user for
+  real before replaying the interaction)
+- rejects a login with the wrong credentials
+- rejects a session check with no auth cookie
+
+### End-to-end tests — Playwright (9 scenarios × 2–3 browser engines)
+
+Page-Object-Model structure, driving the actual running app (not mocked).
+9 unique scenarios; 18 total runs locally (Chromium + WebKit), 27 in CI
+(+ Firefox — see [Design decisions](#end-to-end-playwright)).
+
+<details>
+<summary><strong>auth.spec.ts</strong> — 3 scenarios: signup, session persistence, logout</summary>
+
+- signs up, lands on Boards, and stays authenticated after a reload (the
+  actual proof the httpOnly cookie round-trip works, not just that the API
+  test for it passes)
+- shows an error for the wrong password
+- logs out and can no longer reach a protected page
+
+</details>
+
+<details>
+<summary><strong>boards.spec.ts</strong> — 2 scenarios: board creation, empty state</summary>
+
+- creates a board via the API-bootstrapped session and sees it listed
+- a freshly signed-up user has no boards yet
+
+</details>
+
+<details>
+<summary><strong>board-detail.spec.ts</strong> — 3 scenarios: lists, cards, moving between lists</summary>
+
+- creates lists and cards, and moves a card between lists
+- deletes a card, then deletes the list it was in
+- a card in the only list on a board has no "move to" dropdown (exercises
+  the frontend's actual conditional rendering, not just the happy path)
+
+</details>
+
+<details>
+<summary><strong>visual.spec.ts</strong> — 1 scenario: visual regression</summary>
+
+- board view with lists and cards matches its visual baseline (pixel-diff
+  screenshot comparison, 2% tolerance for anti-aliasing noise; baselines are
+  platform-specific and CI-generated — see [Design decisions](#end-to-end-playwright))
+
+</details>
+
+### Security scanning — OWASP ZAP (1 automated baseline scan, every push)
+
+Not a "test count" in the same sense as the above — a passive DAST crawl of
+the actually-running, actually-built app. See
+[Security scanning](#security-scanning-owasp-zap) for what it checks and
+[bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infrafrontend)
+for what it found and how it was fixed.
 
 ## Status
 
-**Day 1 complete**: API, auth, board ownership, frontend.
-**Day 2 complete**: Playwright E2E (POM structure, API-bootstrapped auth
-fixture, cross-browser, visual regression), Pact contract test (auth
-endpoints), and a security test suite (IDOR route sweep, JWT tampering,
-email-keyed login rate limiting).
-**Day 3 complete**: the app itself is containerized (Docker + Docker Compose),
-CI runs on every push ([GitHub Actions](https://github.com/MateiSapunaru/TrelloJunior/actions),
-5 parallel jobs: api/contract/ui/security/docker), and an OWASP ZAP baseline
-scan runs against the built app with its report uploaded as a build artifact.
-See [Roadmap](#roadmap) for what's genuinely still open (none of the original
-3-day scope — everything past this point would be additions, not gaps).
+**All three planned phases are complete and CI-verified on every push:**
+
+- **Phase 1 — Application**: Express + MongoDB API, JWT-in-httpOnly-cookie
+  auth, board ownership/collaborators, React frontend.
+- **Phase 2 — Test automation**: Playwright E2E (POM structure,
+  API-bootstrapped auth fixture, cross-browser, visual regression), Pact
+  contract test, security test suite (IDOR sweep, JWT tampering, rate
+  limiting).
+- **Phase 3 — Delivery pipeline**: the app is containerized (Docker + Docker
+  Compose), [CI runs 5 parallel jobs](https://github.com/MateiSapunaru/TrelloJunior/actions)
+  on every push (api/contract/ui/security/docker), and an OWASP ZAP baseline
+  scan runs against the built app with its report uploaded as a build
+  artifact.
+
+See [Roadmap](#roadmap) for what's genuinely still open — extensions beyond
+the original scope, not gaps in what was promised.
 
 ## Repo structure
 
 ```
 packages/
   api/    Express + MongoDB backend (TypeScript)
+    src/
+    tests/            functional + security tests (Vitest/Supertest)
+    tests/security/   IDOR / JWT tampering / rate limiting
+    tests/pact/       Pact provider verification
   web/    React + TypeScript frontend (Vite)
+    src/
+    tests/pact/       Pact consumer test
+  e2e/    Playwright E2E suite
+    pages/            Page Object Model classes
+    fixtures/         API-bootstrapped auth fixture
+    tests/            E2E + visual regression specs
 ```
 
-An npm workspaces monorepo, not two separate repos: the app is one deployable unit
-for the purposes of this project, and workspaces keep dependency management and
-scripts simple without pulling in Lerna/Nx/Turborepo, which would be unjustifiable
-tooling weight at this scale.
+An npm workspaces monorepo, not separate repos: the app is one deployable unit
+for this project, and workspaces keep dependency management and scripts simple
+without pulling in Lerna/Nx/Turborepo, which would be unjustifiable tooling
+weight at this scale.
 
 ## Running it locally
 
@@ -53,19 +373,33 @@ npm run dev -w packages/api                          # :4000
 npm run dev -w packages/web                           # :5173
 ```
 
-`packages/api/.env` and `packages/web/.env` are gitignored — they hold local dev
-secrets/config, never committed. `npm run mongo:down` stops the container;
-`docker-compose.yml` only defines MongoDB for now — containerizing the API/web
-apps themselves is Day 3 scope, once there's a Dockerfile per app to write.
+Or run the whole stack (mongo + api + web) containerized, no local Node
+install needed beyond what's used to build it:
 
-**Why Mongo got containerized now, ahead of the original Day 3 plan:** Playwright
-(Day 2) drives the actual running app end-to-end — unlike Vitest, which imports
-Express in-process and needs no real server — so it needs a real, stable MongoDB
-to point at. A hand-rolled `mongodb-memory-server` script (what Day 1's browser
-verification used, since it's throwaway and disposable) isn't something you can
-rely on being up between sessions. A single-service `docker-compose.yml` is the
-smallest real fix, and it's the same tool Day 3 was already committed to — not a
-new dependency, just used a day earlier than planned.
+```bash
+docker compose up --build
+```
+
+`packages/api/.env` and `packages/web/.env` are gitignored — they hold local
+dev secrets/config, never committed. `npm run mongo:down` stops the Mongo-only
+container; `docker compose down` stops the full stack.
+
+## Running the tests
+
+| What | Command | Needs |
+| --- | --- | --- |
+| API functional + security (49 tests) | `npm test -w packages/api` | nothing — starts its own throwaway MongoDB |
+| API security tests only | `npm test -w packages/api -- tests/security` | same as above |
+| Contract — consumer (writes the pact file) | `npm run test:pact -w packages/web` | nothing |
+| Contract — provider verification | `npm run test:pact -w packages/api` | the pact file above must exist; starts its own throwaway MongoDB |
+| E2E — all browsers, headless | `npm test -w packages/e2e` | `npm run mongo:up` first (or a running docker-compose stack); auto-starts api/web dev servers |
+| E2E — interactive UI mode | `npm run test:ui -w packages/e2e` | same as above |
+| E2E — headed (watch the browser) | `npm run test:headed -w packages/e2e` | same as above |
+| Docker images build | `docker build -f packages/api/Dockerfile .` / same for `packages/web/Dockerfile` | Docker |
+
+All of the above also run automatically on every push — see
+[CI/CD](#cicd-github-actions) — and the [Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions)
+has the real, current results rather than a claim in this README.
 
 ## Design decisions
 
@@ -88,13 +422,15 @@ node-gyp is extra setup for no functional benefit here.
 
 **JWT lives in an httpOnly cookie, not `localStorage`, and never appears in a JSON
 response body.** `POST /auth/signup` and `POST /auth/login` set the token via
-`Set-Cookie` (httpOnly, `sameSite: strict`, `secure` in production) and return only
-the user profile in the body. Returning it in the body *in addition* to the cookie
-would defeat the point — any script that can read a `fetch` response (legitimate
-code or an XSS payload) has equal access to it either way, so the token would be
-readable regardless of where the cookie lives. `sameSite: strict` is treated as
-sufficient CSRF protection here specifically because this app has no cross-site
-login redirect or third-party embed flow that strict mode would break.
+`Set-Cookie` (httpOnly, `sameSite: strict`, `secure` controlled by a dedicated
+`COOKIE_SECURE` flag — see [bug #5](#5-session-persistence-broke-in-webkit-specifically-only-against-the-container-backendfrontend-boundary))
+and return only the user profile in the body. Returning it in the body *in
+addition* to the cookie would defeat the point — any script that can read a
+`fetch` response (legitimate code or an XSS payload) has equal access to it
+either way, so the token would be readable regardless of where the cookie
+lives. `sameSite: strict` is treated as sufficient CSRF protection here
+specifically because this app has no cross-site login redirect or third-party
+embed flow that strict mode would break.
 
 One consequence: since client-side JS can never read an httpOnly cookie, the
 frontend has no way to know "am I logged in" after a page reload just by inspecting
@@ -109,8 +445,8 @@ board, delete board, manage collaborators) gets **403** — they already have re
 access, so hiding that the board exists would be pointless and inconsistent. This
 split is enforced centrally by two middleware (`loadBoard`, `loadList` in
 `src/middleware/`) rather than repeated per-route, and it's regression-tested in
-`tests/boards.test.ts`. It's also the direct precursor to the IDOR test suite
-planned for Day 2 — the same threat model, proven at the functional level first.
+`tests/boards.test.ts` — then swept systematically across every route in
+`tests/security/idor.test.ts` (see [Test suite reference](#test-suite-reference)).
 
 **Collaborators can edit board *content*, not board *metadata*.** Any board member
 (owner or collaborator) can create/edit/delete Lists and Cards — that's the entire
@@ -150,7 +486,7 @@ Query). Four pages of mostly-server data don't need one; a plain `fetch` wrapper
 need defending on its own merits.
 
 **No component-testing library** (no React Testing Library). Deliberate, not an
-oversight: Playwright (Day 2) is this project's UI test layer — real browser,
+oversight: Playwright is this project's UI test layer — real browser,
 visual regression included. Adding component unit tests on top would be
 test-pyramid duplication for an app this size; the API already has functional
 coverage via Vitest+Supertest.
@@ -193,16 +529,23 @@ interaction. Standard "bypass the UI for setup, only exercise the UI for what
 the test is actually about" practice — faster, and each test's data is isolated
 by construction (a unique user), not by database reset between tests.
 
-**Two rendering engines locally (Chromium + WebKit), not three.** Firefox's
+**Two rendering engines locally (Chromium + WebKit), three in CI.** Firefox's
 Windows build needs the Microsoft Visual C++ Redistributable, not installed on
 this dev machine; installing a system package wasn't something to do inside a
-test-config decision. `playwright.config.ts` documents how to add it back.
+test-config decision. CI (a clean Linux runner, no such missing dependency) runs
+all three via `PLAYWRIGHT_PROJECTS=all` — see [CI/CD](#cicd-github-actions).
 
-**Visual regression baselines are Windows-generated and will need
-regenerating on Linux CI** (Day 3) — font rendering differs enough between
-operating systems that pixel-diff baselines aren't portable across them. This is
-a known, general limitation of screenshot-based visual regression, not specific
-to this setup.
+**Visual regression baselines are generated per-platform, by the environment
+that will actually compare against them.** Font rendering differs enough
+between Windows and Linux that pixel-diff baselines aren't portable across
+them — a Windows-generated baseline would fail in Linux CI for reasons that
+have nothing to do with a real regression. The Linux baselines committed here
+were downloaded from CI's own first run (it correctly failed once, with no
+baseline to compare against, then the resulting capture was retrieved as a
+build artifact and committed) — generated by the actual target environment,
+not a local approximation. Windows baselines stay alongside them for local
+dev on a Windows machine; Playwright's snapshot naming (`-win32` vs `-linux`
+suffix) keeps both without conflict.
 
 ### Contract testing (Pact)
 
@@ -236,7 +579,9 @@ assumptions (no server listening, no pact file passed to a `Verifier`).
 
 This is a deliberately narrow, explicitly-scoped set of checks — not a general
 "security testing" claim. Three things, matching what the ownership/collaborator
-model and cookie-based auth actually create as surface area:
+model and cookie-based auth actually create as surface area (see
+[Testing strategy](#testing-strategy) for the risk-based reasoning behind why
+these three specifically):
 
 **IDOR via a table-driven route sweep, not a copy of the functional tests.**
 `tests/security/idor.test.ts` enumerates all 13 board/list/card routes in one
@@ -354,7 +699,7 @@ this scope — the report is meant to be read, not to hard-block a merge. Can
 be tightened later if wanted.
 
 **The scan found real gaps on its first run, and they're fixed, not just
-logged** — see [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infra--frontend)
+logged** — see [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infrafrontend)
 below. `packages/web/nginx.conf` and `packages/web/vite.config.ts`'s
 `preview.headers` both carry the same CSP/`X-Frame-Options`/
 `X-Content-Type-Options` headers now, since they're two independent static
@@ -501,7 +846,8 @@ identical headers there too via `vite.config.ts`. Verified in a real browser
 (a fresh tab, to rule out stale console history) that the CSP doesn't break
 anything — Google Fonts still loads, signup/auth/board creation all still
 work, zero console errors — before trusting it, and re-ran the scan
-afterward to confirm the Medium/Low counts actually dropped.
+afterward to confirm the Medium/Low counts actually dropped (Medium 3→2,
+Low 5→4).
 
 Left the Subresource Integrity finding as understood-but-not-fixed: SRI
 hashes protect against a *third-party* CDN serving tampered content, and
@@ -512,23 +858,28 @@ premise doesn't hold for this deployment shape.
 
 ## Roadmap
 
-- **Day 2 — done**: Playwright E2E suite (POM structure, cross-browser, visual
+- **Phase 2 — done**: Playwright E2E suite (POM structure, cross-browser, visual
   regression); Pact consumer-driven contract test (auth endpoints only — see
   [Design decisions](#contract-testing-pact)); IDOR/JWT-tampering/rate-limit
   security tests added to the API suite (see
   [Design decisions](#security-tests)).
-- **Day 3 — done**: Docker + Docker Compose for the whole app (see
+- **Phase 3 — done**: Docker + Docker Compose for the whole app (see
   [Docker](#docker)); GitHub Actions CI with 5 parallel jobs (see
   [CI/CD](#cicd-github-actions)); OWASP ZAP baseline scan wired in, its
   findings actually fixed rather than just reported (see
   [Security scanning](#security-scanning-owasp-zap) and
   [bug #6](#6-zap-baseline-scan-found-real-missing-security-headers-infrafrontend)).
 
-Everything from the original 3-day plan is built. Genuine next steps, not
-gaps in what was promised: a Pact Broker (currently local pact files — see
-[Contract testing](#contract-testing-pact)); contracting the
-authenticated board/list/card endpoints (needs Pact's provider-state +
-`requestFilter` pattern to inject a real session cookie); tightening the
-remaining ZAP findings (`Cross-Origin-*-Policy` headers, a stricter
-per-directive CSP); and a branch-protection rule requiring CI to pass before
-merge, once this repo has more than one contributor for that to matter.
+Everything from the original plan is built. Genuine next steps, not gaps in
+what was promised:
+
+- A real **Pact Broker** (currently local pact files — see
+  [Contract testing](#contract-testing-pact)) for versioning and
+  webhook-triggered verification.
+- **Contracting the authenticated board/list/card endpoints**, which needs
+  Pact's provider-state + `requestFilter` pattern to inject a real session
+  cookie into the replayed request.
+- **Tightening the remaining ZAP findings** (`Cross-Origin-*-Policy` headers,
+  a stricter per-directive CSP).
+- A **branch-protection rule** requiring CI to pass before merge, once this
+  repo has more than one contributor for that to matter.
