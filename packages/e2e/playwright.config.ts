@@ -10,6 +10,13 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     trace: "on-first-retry",
   },
+  expect: {
+    // A small tolerance rather than a pixel-perfect match: anti-aliasing and
+    // sub-pixel font rendering vary slightly run-to-run even with nothing
+    // actually different on the page, and a 0% tolerance makes visual tests
+    // flaky for reasons that have nothing to do with a real regression.
+    toHaveScreenshot: { maxDiffPixelRatio: 0.02 },
+  },
   // Two engines: Chromium (Blink) and WebKit. Firefox is deliberately left out
   // here - its Windows build needs the Microsoft Visual C++ Redistributable
   // (x64), which this dev machine doesn't have installed, and that's a

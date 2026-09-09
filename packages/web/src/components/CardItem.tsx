@@ -45,7 +45,7 @@ export function CardItem({ boardId, listId, card, otherLists, onDeleted, onMoved
   return (
     <li className="card-item" data-testid="card-item">
       <div className="card-item-row">
-        <span>{card.title}</span>
+        <span data-testid="card-item-title">{card.title}</span>
         <button
           onClick={() => void handleDelete()}
           className="btn-icon"
