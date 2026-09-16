@@ -1,0 +1,20 @@
+# Non-sensitive runtime config for the api Deployment. Mirrors packages/api/.env.example
+# minus MONGO_URI/JWT_SECRET, which live in 02-secret.yaml instead (see README for the
+# ConfigMap-vs-Secret reasoning).
+#
+# The web Deployment needs no env vars here: Vite inlines VITE_API_URL into the built JS
+# bundle at image build time (see packages/web/Dockerfile), so there's nothing left for
+# Kubernetes to inject at runtime.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: trellojunior
+data:
+  PORT: "4000"
+  CORS_ORIGIN: "http://localhost:5173"
+  # Same reasoning as docker-compose.yml: this cluster is reached via kubectl
+  # port-forward over plain HTTP, not a real TLS-terminating ingress, so a Secure
+  # cookie would never persist. Only "true" for a deployment that actually
+  # terminates TLS in front of the api.
+  COOKIE_SECURE: "false"

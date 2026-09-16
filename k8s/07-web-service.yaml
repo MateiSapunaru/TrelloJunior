@@ -1,0 +1,13 @@
+# ClusterIP, same reasoning as 05-api-service.yaml - reached via port-forward in this
+# demo, would sit behind an Ingress in a real deployment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: trellojunior
+spec:
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80

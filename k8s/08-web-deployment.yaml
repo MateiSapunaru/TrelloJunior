@@ -1,0 +1,42 @@
+# Deployment, same reasoning as 06-api-deployment.yaml - stateless, interchangeable
+# pods serving a prebuilt static bundle via nginx.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: trellojunior
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: trellojunior-web:kind
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

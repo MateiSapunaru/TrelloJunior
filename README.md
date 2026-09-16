@@ -19,6 +19,8 @@ and a DAST scan, all wired into CI.
 - [Running the tests](#running-the-tests)
 - [Design decisions](#design-decisions)
 - [Bugs found via testing](#bugs-found-via-testing)
+- [Kubernetes (portfolio demo)](#kubernetes-portfolio-demo)
+- [CI notifications (n8n)](#ci-notifications-n8n)
 - [Possible next steps](#possible-next-steps)
 
 ## Testing strategy
@@ -301,9 +303,13 @@ for what it found and how it was fixed.
 ## Status
 
 The app, its test automation suite, its Docker setup, and its CI pipeline
-(build, full test suite, and a security scan on every push) are complete
-and verified via the
-[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions). See
+(build, full test suite, a security scan, and a Kubernetes deploy smoke
+test on every push) are complete and verified via the
+[Actions tab](https://github.com/MateiSapunaru/TrelloJunior/actions). The
+Kubernetes manifests and CI notification workflow are a portfolio-scope
+demonstration of those tools, not a production deployment — see
+[Kubernetes](#kubernetes-portfolio-demo) and
+[CI notifications](#ci-notifications-n8n) for the honest scope of each. See
 [Possible next steps](#possible-next-steps) for planned extensions.
 
 ## Repo structure
@@ -322,6 +328,8 @@ packages/
     pages/            Page Object Model classes
     fixtures/         API-bootstrapped auth fixture
     tests/            E2E + visual regression specs
+k8s/               Kubernetes manifests (see Kubernetes)
+n8n-workflows/     CI notification workflow, exported as JSON (see CI notifications)
 ```
 
 An npm workspaces monorepo, not separate repos. The app is one deployable
@@ -365,6 +373,7 @@ Mongo-only container; `docker compose down` stops the full stack.
 | E2E — interactive UI mode | `npm run test:ui -w packages/e2e` | same as above |
 | E2E — headed (watch the browser) | `npm run test:headed -w packages/e2e` | same as above |
 | Docker images build | `docker build -f packages/api/Dockerfile .` / same for `packages/web/Dockerfile` | Docker |
+| Kubernetes deploy smoke test | `kind create cluster && kubectl apply -f k8s/` (see [Kubernetes](#kubernetes-portfolio-demo)) | Docker, `kind`, `kubectl` — runs automatically in CI, `kind` is optional for local use |
 
 All of the above also run automatically on every push — see
 [CI](#ci-github-actions) and the
@@ -679,7 +688,8 @@ deploy them anywhere.
 <details>
 <summary>job breakdown and how each one starts the app</summary>
 
-Five jobs run in parallel, with no `needs:` between them:
+Six jobs run largely in parallel, with a seventh reporting the combined
+result once the others finish:
 
 - **`api`** runs `npm test -w packages/api`: functional and security tests
   together, same Vitest suite and infra (see
@@ -698,6 +708,16 @@ Five jobs run in parallel, with no `needs:` between them:
   outcome.
 - **`security`** runs the ZAP baseline scan (see below).
 - **`docker`** smoke-builds both Dockerfiles (see [Docker](#docker)).
+- **`k8s`** deploys the app to a throwaway `kind` cluster (see
+  [Kubernetes](#kubernetes-portfolio-demo)) and independently of `docker`,
+  since it needs the images loaded into a live cluster rather than just
+  built.
+- **`notify`** (`needs` all six, `if: always()`) reports the overall result
+  to n8n (see [CI notifications](#ci-notifications-n8n)). It runs whether
+  the other jobs passed or failed — a failure notification is the more
+  useful one to not skip — and `continue-on-error`s past a missing
+  `N8N_WEBHOOK_URL` secret so a fork without one configured doesn't fail
+  the whole pipeline over a notification.
 
 Jobs that need a real running server build it and start it in the
 background, rather than reusing Playwright's dev-server-spawning
@@ -742,6 +762,105 @@ per-directive CSP, `Permissions-Policy` — are progressively more niche for
 this app. COEP and COOP specifically matter for cross-origin isolation
 scenarios like `SharedArrayBuffer`, which this app doesn't use, so they're
 left as known follow-ups rather than chased down for their own sake.
+
+</details>
+
+
+### Kubernetes (portfolio demo)
+
+<details>
+<summary>Deployment vs StatefulSet, Service types, Config vs Secret, and what's deliberately left out</summary>
+
+**This is a demonstration of Kubernetes/orchestration concepts for a
+portfolio, not a production setup.** The manifests live under `/k8s` and
+the `k8s` CI job (see [CI](#ci-github-actions)) deploys them to a `kind`
+cluster — Kubernetes-in-Docker, created fresh for the job and torn down at
+the end. `kind` is explicitly a local/CI tool for exactly this kind of
+demonstration; it is not a managed cluster (EKS/GKE/AKS) and nothing here
+is meant to imply this app runs in production on Kubernetes.
+
+**Deployment for `api` and `web`, StatefulSet for `mongo`.** Both api and
+web pods are stateless and interchangeable — any pod can serve any
+request, so a Deployment's rolling-update/replace semantics fit. Mongo
+needs a stable identity and its own persistent volume, which is what a
+StatefulSet's `volumeClaimTemplates` provides — each replica gets its own
+PVC automatically. At a single replica the practical difference is small,
+but StatefulSet is still the correct primitive to reach for, not a
+Deployment-plus-PVC workaround.
+
+**`ClusterIP` for every Service, not `NodePort`.** Nothing here needs to
+be reachable directly from outside the cluster. The CI smoke test reaches
+`api` via `kubectl port-forward`, which works against a `ClusterIP`
+service the same way it would against any other type. In a real
+deployment, external traffic would arrive through an Ingress in front of
+these services — `NodePort`/`LoadBalancer` would only be justified if
+something needed to reach a service without going through port-forwarding
+or an Ingress, which nothing here does.
+
+**ConfigMap for non-sensitive values, Secret for `JWT_SECRET` and
+`MONGO_URI`.** `PORT`, `CORS_ORIGIN`, and `COOKIE_SECURE` go in the
+ConfigMap. The connection string goes in the Secret on the same principle
+as any credential-shaped value — even though this particular Mongo has no
+auth (see below), a connection string is the kind of value that *usually*
+carries credentials, and treating it as sensitive by convention is the
+right habit regardless of what one specific instance needs. The Secret
+manifest in this repo holds plaintext demo values, not real ones —
+Kubernetes Secrets are base64-encoded, not encrypted, and this cluster is
+destroyed at the end of every CI run. A real deployment would source these
+from an actual secret manager (Sealed Secrets, External Secrets Operator,
+or a cloud KMS) instead of a committed manifest.
+
+**Readiness and liveness probes on `api` (`/health`) and `web` (`/`).**
+Cheap to add and the honest answer to "how does Kubernetes know a pod is
+actually ready to receive traffic" — without them, a pod that's running
+but not yet accepting connections would receive traffic anyway.
+
+**Mongo has no authentication**, same as `docker-compose.yml` — it's only
+reachable from inside the cluster's private network, never exposed
+outside it.
+
+**Deliberately left out**, as scope cuts rather than oversights: an
+Ingress controller (nothing here needs external routing beyond the CI
+smoke test), Horizontal Pod Autoscaling, NetworkPolicies, multiple
+replicas, and Kustomize/Helm (flat manifests are easier to explain
+line-by-line at this stage). See
+[Possible next steps](#possible-next-steps).
+
+</details>
+
+
+### CI notifications (n8n)
+
+<details>
+<summary>Why a webhook-driven workflow, why Discord, and how to import it</summary>
+
+The final `notify` job in CI (see [CI](#ci-github-actions)) posts the
+overall pipeline result — per-job status, branch, commit, and a link back
+to the run — to a webhook URL. `n8n-workflows/ci-pipeline-notification.json`
+is that workflow's exported definition: a Webhook trigger receives the
+payload, an `IF` node branches on success/failure, a `Set` node formats
+the message, and an HTTP Request node posts it to a Discord incoming
+webhook as an embed.
+
+**Discord, because it needs no OAuth setup** — an incoming webhook URL is
+enough, which keeps the demo to one workflow instead of also documenting a
+credential-setup flow. The HTTP Request node is a drop-in replacement
+target: a Slack incoming webhook takes the same shape (swap the URL and
+payload field names), a Telegram bot's `sendMessage` endpoint would work
+the same way, and an SMTP node would replace it entirely for email instead
+of chat.
+
+**To import it:** in n8n, Workflows → Import from File →
+`n8n-workflows/ci-pipeline-notification.json`. Set a `DISCORD_WEBHOOK_URL`
+environment variable in the n8n instance (or edit the HTTP Request node's
+URL directly), activate the workflow, and copy its production webhook URL
+into this repo's `N8N_WEBHOOK_URL` GitHub Actions secret.
+
+**Why this didn't get a live n8n instance to run against in CI:** n8n
+itself isn't deployed anywhere as part of this project — hosting a
+workflow engine is out of scope for a QA portfolio, so the artifact here
+is the workflow definition and the CI-side integration, ready to point at
+any n8n instance (self-hosted, n8n Cloud, or a local one for a demo).
 
 </details>
 
@@ -952,3 +1071,13 @@ These are extensions beyond that scope:
   `master`.
 - A **branch-protection rule** requiring CI to pass before merge, once this
   repo has more than one contributor for that to matter.
+- **An Ingress in front of the Kubernetes services**, replacing the
+  `kubectl port-forward` used for the CI smoke test — needed before any of
+  this could be reached by anything other than a person with cluster
+  access.
+- **Real secret management for Kubernetes** (Sealed Secrets or External
+  Secrets Operator) instead of the plaintext demo `Secret` manifest in
+  `/k8s` — see [Kubernetes](#kubernetes-portfolio-demo).
+- **Kustomize or Helm**, once there's a second environment (e.g. staging
+  vs. this CI demo) that would actually justify templating the manifests
+  instead of applying them as-is.

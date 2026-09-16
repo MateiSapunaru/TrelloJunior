@@ -1,0 +1,16 @@
+# ClusterIP (the default type) - nothing outside the cluster needs to reach the api
+# directly. In this demo the CI smoke test gets to it via `kubectl port-forward`, which
+# works against a ClusterIP service the same way it would against any other type; in a
+# real deployment, external traffic would arrive through an Ingress in front of this
+# service, not by exposing the service itself with NodePort/LoadBalancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: trellojunior
+spec:
+  selector:
+    app: api
+  ports:
+    - port: 4000
+      targetPort: 4000

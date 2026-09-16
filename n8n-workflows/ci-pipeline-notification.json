@@ -1,0 +1,172 @@
+{
+  "name": "TrelloJunior CI Pipeline Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trellojunior-ci",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1a1b2c3d-0001-4a1a-9a1a-000000000001",
+      "name": "CI Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "trellojunior-ci-notification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.body.overall_status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a1b2c3d-0002-4a1a-9a1a-000000000002",
+      "name": "Success or Failure?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "color",
+              "type": "number",
+              "value": 3066993
+            },
+            {
+              "id": "a2",
+              "name": "title",
+              "type": "string",
+              "value": "=CI passed - {{ $json.body.repository }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b2c3d-0003-4a1a-9a1a-000000000003",
+      "name": "Format Success Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 180]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "color",
+              "type": "number",
+              "value": 15158332
+            },
+            {
+              "id": "a2",
+              "name": "title",
+              "type": "string",
+              "value": "=CI failed - {{ $json.body.repository }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1a1b2c3d-0004-4a1a-9a1a-000000000004",
+      "name": "Format Failure Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('CI Webhook').item.json.query.discord_webhook_url || $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"embeds\": [\n    {\n      \"title\": \"{{ $json.title }}\",\n      \"color\": {{ $json.color }},\n      \"url\": \"{{ $('CI Webhook').item.json.body.run_url }}\",\n      \"fields\": [\n        { \"name\": \"Branch\", \"value\": \"{{ $('CI Webhook').item.json.body.branch }}\", \"inline\": true },\n        { \"name\": \"Commit\", \"value\": \"{{ $('CI Webhook').item.json.body.commit_sha }}\", \"inline\": true },\n        { \"name\": \"api\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.api }}\", \"inline\": true },\n        { \"name\": \"contract\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.contract }}\", \"inline\": true },\n        { \"name\": \"ui\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.ui }}\", \"inline\": true },\n        { \"name\": \"security\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.security }}\", \"inline\": true },\n        { \"name\": \"docker\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.docker }}\", \"inline\": true },\n        { \"name\": \"k8s\", \"value\": \"{{ $('CI Webhook').item.json.body.jobs.k8s }}\", \"inline\": true }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "1a1b2c3d-0005-4a1a-9a1a-000000000005",
+      "name": "Post to Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    }
+  ],
+  "connections": {
+    "CI Webhook": {
+      "main": [
+        [
+          {
+            "node": "Success or Failure?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Success or Failure?": {
+      "main": [
+        [
+          {
+            "node": "Format Success Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Failure Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Message": {
+      "main": [
+        [
+          {
+            "node": "Post to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Failure Message": {
+      "main": [
+        [
+          {
+            "node": "Post to Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "trellojunior-portfolio-demo"
+  }
+}

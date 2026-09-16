@@ -1,0 +1,51 @@
+# Deployment, not StatefulSet: every api pod is interchangeable - no local state, no
+# identity to preserve - so a Deployment's rolling-update/replace semantics are the
+# right fit (see 04-mongo-statefulset.yaml for the contrasting case).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: trellojunior
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: trellojunior-api:kind
+          # This image only ever exists on the kind node it was `kind load
+          # docker-image`-ed into (see the k8s CI job) - there's no registry to pull
+          # it from, so the default Always policy would just fail.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: api-config
+            - secretRef:
+                name: api-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

@@ -1,0 +1,50 @@
+# StatefulSet, not a Deployment: Mongo needs a stable identity and its own persistent
+# volume per replica. A Deployment's pods are interchangeable and their PVCs (if you
+# tried to share one) would collide the moment you scaled past 1 - volumeClaimTemplates
+# below gives each replica its own volume automatically, which is the whole point of
+# using a StatefulSet even at replica count 1.
+#
+# No authentication on this Mongo, same as docker-compose.yml: it's only reachable
+# from inside the cluster's private network, never exposed outside it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: trellojunior
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+          readinessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 15
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

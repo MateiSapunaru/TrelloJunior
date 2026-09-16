@@ -172,3 +172,92 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker build -f packages/api/Dockerfile -t trellojunior-api .
       - run: docker build -f packages/web/Dockerfile -t trellojunior-web .
+
+  # Deploys the app to a throwaway Kubernetes cluster and confirms it actually comes
+  # up - a portfolio-scope demonstration of the k8s manifests in /k8s, not a real
+  # deployment target (see README for the full "why kind, not a managed cluster"
+  # writeup). Independent of the docker job above: this one needs the images loaded
+  # into a live cluster, not just built.
+  k8s:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: trellojunior
+
+      # Same two Dockerfiles as the docker job, tagged for local use inside the kind
+      # node rather than a registry - `kind load docker-image` below is what actually
+      # gets them there, so there's nothing to push anywhere.
+      - run: docker build -f packages/api/Dockerfile -t trellojunior-api:kind .
+      - run: docker build -f packages/web/Dockerfile -t trellojunior-web:kind .
+      - run: kind load docker-image trellojunior-api:kind --name trellojunior
+      - run: kind load docker-image trellojunior-web:kind --name trellojunior
+
+      - name: Apply manifests
+        run: kubectl apply -f k8s/
+
+      - name: Wait for pods to be ready
+        run: |
+          kubectl wait --for=condition=ready pod -l app=mongo -n trellojunior --timeout=120s
+          kubectl wait --for=condition=available deployment/api -n trellojunior --timeout=120s
+          kubectl wait --for=condition=available deployment/web -n trellojunior --timeout=120s
+
+      # Proves the deployed stack actually works end to end (api reachable, and able
+      # to talk to Mongo), not just that the pods started - a health check alone
+      # wouldn't catch a broken MONGO_URI/Secret wiring, for example.
+      - name: Smoke test via kubectl port-forward
+        run: |
+          kubectl port-forward svc/api 4000:4000 -n trellojunior &
+          PF_PID=$!
+          sleep 3
+          curl -sf http://localhost:4000/health
+          curl -sf -X POST http://localhost:4000/auth/signup \
+            -H "Content-Type: application/json" \
+            -d '{"email":"k8s-smoke@example.com","password":"supersecret123","name":"K8s Smoke Test"}'
+          kill $PF_PID
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name trellojunior
+
+  # Reports the overall pipeline result to an n8n workflow (see /n8n-workflows), which
+  # forwards it to Discord. `always()` so this still fires on a failed run - that's the
+  # more useful notification, not the one to skip. continue-on-error because a missing
+  # or misconfigured N8N_WEBHOOK_URL secret (e.g. on a fork of this repo) shouldn't fail
+  # the pipeline over a notification.
+  notify:
+    runs-on: ubuntu-latest
+    needs: [api, contract, ui, security, docker, k8s]
+    if: always()
+    steps:
+      - name: Send CI result to n8n
+        continue-on-error: true
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+          OVERALL_STATUS: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$N8N_WEBHOOK_URL" ]; then
+            echo "N8N_WEBHOOK_URL not set, skipping notification"
+            exit 0
+          fi
+          curl -sf -X POST "$N8N_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"overall_status\": \"$OVERALL_STATUS\",
+              \"repository\": \"${{ github.repository }}\",
+              \"branch\": \"${{ github.ref_name }}\",
+              \"commit_sha\": \"${{ github.sha }}\",
+              \"run_url\": \"$RUN_URL\",
+              \"jobs\": {
+                \"api\": \"${{ needs.api.result }}\",
+                \"contract\": \"${{ needs.contract.result }}\",
+                \"ui\": \"${{ needs.ui.result }}\",
+                \"security\": \"${{ needs.security.result }}\",
+                \"docker\": \"${{ needs.docker.result }}\",
+                \"k8s\": \"${{ needs.k8s.result }}\"
+              }
+            }"

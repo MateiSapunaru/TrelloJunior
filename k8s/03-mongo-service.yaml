@@ -1,0 +1,17 @@
+# Headless (clusterIP: None) - the standard pairing for a StatefulSet. Instead of load
+# balancing across replicas behind one virtual IP, it gives each pod its own stable DNS
+# name (mongo-0.mongo.trellojunior.svc.cluster.local). At a single replica that
+# distinction isn't visible day-to-day, but it's what makes the StatefulSet's identity
+# guarantee actually usable if this were ever scaled to a real replica set.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: trellojunior
+spec:
+  clusterIP: None
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017
