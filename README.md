@@ -19,6 +19,7 @@ and a DAST scan, all wired into CI.
 - [Running the tests](#running-the-tests)
 - [Design decisions](#design-decisions)
 - [Bugs found via testing](#bugs-found-via-testing)
+- [Allure Report (E2E only)](#allure-report-e2e-only)
 - [Kubernetes (portfolio demo)](#kubernetes-portfolio-demo)
 - [CI notifications (n8n)](#ci-notifications-n8n)
 - [Possible next steps](#possible-next-steps)
@@ -329,7 +330,10 @@ packages/
     fixtures/         API-bootstrapped auth fixture
     tests/            E2E + visual regression specs
 k8s/               Kubernetes manifests (see Kubernetes)
-n8n-workflows/     CI notification workflow, exported as JSON (see CI notifications)
+n8n-workflows/     Three CI notification workflows, exported as JSON (see CI notifications)
+.github/
+  scripts/         Node scripts that summarize ZAP/Allure output for n8n
+  workflows/       CI pipeline (ci.yml)
 ```
 
 An npm workspaces monorepo, not separate repos. The app is one deployable
@@ -372,6 +376,7 @@ Mongo-only container; `docker compose down` stops the full stack.
 | E2E — all browsers, headless | `npm test -w packages/e2e` | `npm run mongo:up` first (or a running docker-compose stack); auto-starts api/web dev servers |
 | E2E — interactive UI mode | `npm run test:ui -w packages/e2e` | same as above |
 | E2E — headed (watch the browser) | `npm run test:headed -w packages/e2e` | same as above |
+| Generate the Allure report from the last E2E run | `npm run report:allure -w packages/e2e` (see [Allure Report](#allure-report-e2e-only)) | an E2E run above must have produced `allure-results/` first |
 | Docker images build | `docker build -f packages/api/Dockerfile .` / same for `packages/web/Dockerfile` | Docker |
 | Kubernetes deploy smoke test | `kind create cluster && kubectl apply -f k8s/` (see [Kubernetes](#kubernetes-portfolio-demo)) | Docker, `kind`, `kubectl` — runs automatically in CI, `kind` is optional for local use |
 
@@ -705,8 +710,11 @@ result once the others finish:
   Firefox for real 3-engine coverage, excluded locally only because this dev
   machine is missing a Windows-specific dependency a Linux runner doesn't
   need. The HTML report gets uploaded as a build artifact regardless of
-  outcome.
-- **`security`** runs the ZAP baseline scan (see below).
+  outcome, and so does the generated Allure report (see
+  [Allure Report](#allure-report-e2e-only)) — its pass/fail/broken/skipped
+  counts also get posted to n8n.
+- **`security`** runs the ZAP baseline scan (see below) and posts a
+  findings-by-risk-level summary to n8n.
 - **`docker`** smoke-builds both Dockerfiles (see [Docker](#docker)).
 - **`k8s`** deploys the app to a throwaway `kind` cluster (see
   [Kubernetes](#kubernetes-portfolio-demo)) and independently of `docker`,
@@ -762,6 +770,41 @@ per-directive CSP, `Permissions-Policy` — are progressively more niche for
 this app. COEP and COOP specifically matter for cross-origin isolation
 scenarios like `SharedArrayBuffer`, which this app doesn't use, so they're
 left as known follow-ups rather than chased down for their own sake.
+
+</details>
+
+
+### Allure Report (E2E only)
+
+<details>
+<summary>Why Playwright-only, why a CI artifact instead of a hosted report</summary>
+
+**Scoped to the Playwright E2E suite, not the Vitest API/security suite.**
+Allure has an official, actively maintained reporter for Playwright
+(`allure-playwright`). It has no official Vitest adapter — only unofficial
+community packages, and pulling in a barely-maintained dependency just to
+say "Allure covers everything" is a worse trade than being explicit about
+the boundary. The Vitest suites already have their own clear pass/fail
+output in the `api` job; Allure's value here is specifically the richer,
+navigable report format for the cross-browser E2E run.
+
+**The report is a CI artifact, same as the existing Playwright HTML
+report — not published anywhere persistent.** `playwright.config.ts` runs
+`allure-playwright` alongside the existing `html` reporter (two reporters,
+two output directories, no interference), and the `ui` job runs `allure
+generate` afterward and uploads the result as the `allure-report`
+artifact. A hosted version (GitHub Pages, with history retained across
+runs for Allure's trend graphs) would be nicer to link to, but it's a real
+publish step with its own moving parts, and this project already draws a
+clear "no deployment automation" line (see
+[Possible next steps](#possible-next-steps)) — adding a publish step just
+for a test report would blur that line for a benefit that doesn't
+outweigh it at this scope.
+
+**Allure Report 3's generator is a plain Node CLI** (the `allure` package,
+not the older Java-based `allure-commandline`) — confirmed by running it
+locally before wiring it into CI, rather than assuming version 2's JVM
+requirement still applied. One less runtime for the `ui` job to install.
 
 </details>
 
@@ -832,35 +875,66 @@ line-by-line at this stage). See
 ### CI notifications (n8n)
 
 <details>
-<summary>Why a webhook-driven workflow, why Discord, and how to import it</summary>
+<summary>Three small workflows instead of one big one, why Discord, and how to import them</summary>
 
-The final `notify` job in CI (see [CI](#ci-github-actions)) posts the
-overall pipeline result — per-job status, branch, commit, and a link back
-to the run — to a webhook URL. `n8n-workflows/ci-pipeline-notification.json`
-is that workflow's exported definition: a Webhook trigger receives the
-payload, an `IF` node branches on success/failure, a `Set` node formats
-the message, and an HTTP Request node posts it to a Discord incoming
-webhook as an embed.
+Three separate points in CI post to three separate n8n webhooks, each
+driving its own small, single-purpose workflow under `/n8n-workflows`
+rather than one workflow branching three ways internally:
+
+- **`ci-pipeline-notification.json`** — posted to by the final `notify`
+  job (`needs` every other job, `if: always()`): overall pipeline result,
+  per-job status, branch, commit, and a link back to the run. A Webhook
+  trigger receives the payload, an `IF` node branches on success/failure,
+  a `Set` node formats the message, and an HTTP Request node posts it to
+  Discord as an embed.
+- **`zap-findings-notification.json`** — posted to from the `security`
+  job right after the ZAP scan step (see
+  [Security scanning](#security-scanning-owasp-zap)): finding counts by
+  risk level (High/Medium/Low/Informational), parsed by
+  `.github/scripts/notify-zap-findings.mjs` from the same
+  `report_json.json` the action already writes. A `Set` node picks the
+  embed's color from the counts (red if any High, orange if any Medium,
+  green otherwise) before posting.
+- **`allure-report-notification.json`** — posted to from the `ui` job
+  after the Allure report is generated (see
+  [Allure Report](#allure-report-e2e-only)): pass/failed/broken/skipped
+  counts, tallied by `.github/scripts/notify-allure-summary.mjs` directly
+  from the raw `allure-results/*-result.json` files rather than the
+  generated report's own summary widget, since that's an internal detail
+  of the Allure report format this script shouldn't depend on.
+
+Keeping these as three small workflows instead of one multiplexed workflow
+means each is independently easy to read and explain — "this one relays
+overall CI status," "this one summarizes a security scan," "this one
+summarizes an E2E run" — and none of them depend on the shape of the
+other two. The trade-off is three webhook paths (and, if hosted at
+different URLs, three secrets) to keep pointed at wherever n8n is running,
+instead of one.
 
 **Discord, because it needs no OAuth setup** — an incoming webhook URL is
-enough, which keeps the demo to one workflow instead of also documenting a
-credential-setup flow. The HTTP Request node is a drop-in replacement
+enough. The HTTP Request node in every workflow is a drop-in replacement
 target: a Slack incoming webhook takes the same shape (swap the URL and
 payload field names), a Telegram bot's `sendMessage` endpoint would work
 the same way, and an SMTP node would replace it entirely for email instead
 of chat.
 
-**To import it:** in n8n, Workflows → Import from File →
-`n8n-workflows/ci-pipeline-notification.json`. Set a `DISCORD_WEBHOOK_URL`
-environment variable in the n8n instance (or edit the HTTP Request node's
-URL directly), activate the workflow, and copy its production webhook URL
-into this repo's `N8N_WEBHOOK_URL` GitHub Actions secret.
+**To import them:** in n8n, Workflows → Import from File, once per file
+under `/n8n-workflows`. Set a `DISCORD_WEBHOOK_URL` environment variable
+in the n8n instance (all three workflows read it the same way), activate
+each workflow, and copy each one's production webhook URL into this
+repo's `N8N_WEBHOOK_URL`, `N8N_ZAP_WEBHOOK_URL`, and
+`N8N_ALLURE_WEBHOOK_URL` GitHub Actions secrets respectively. Each CI step
+that posts to one of these is wrapped in `continue-on-error` and checks
+its own secret is set before doing anything, so a fork (or a local clone
+without n8n configured) doesn't fail its pipeline over a missing
+notification target — it just skips that one post and logs why.
 
 **Why this didn't get a live n8n instance to run against in CI:** n8n
 itself isn't deployed anywhere as part of this project — hosting a
-workflow engine is out of scope for a QA portfolio, so the artifact here
-is the workflow definition and the CI-side integration, ready to point at
-any n8n instance (self-hosted, n8n Cloud, or a local one for a demo).
+workflow engine is out of scope for a QA portfolio, so the artifacts here
+are the three workflow definitions and their CI-side integration, ready to
+point at any n8n instance (self-hosted, n8n Cloud, or a local one for a
+demo).
 
 </details>
 
@@ -1081,3 +1155,8 @@ These are extensions beyond that scope:
 - **Kustomize or Helm**, once there's a second environment (e.g. staging
   vs. this CI demo) that would actually justify templating the manifests
   instead of applying them as-is.
+- **Hosting the Allure report on GitHub Pages** instead of a CI artifact
+  (see [Allure Report](#allure-report-e2e-only)), including history
+  retention across runs for its trend graphs — deferred for the same
+  "no publish step beyond what's already justified" reasoning as the CD
+  item above.

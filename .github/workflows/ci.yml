@@ -106,6 +106,29 @@ jobs:
           path: packages/e2e/tests/**/*.png
           retention-days: 14
           if-no-files-found: ignore
+      - name: Generate Allure report
+        if: always()
+        working-directory: packages/e2e
+        run: npm run report:allure
+      # A CI artifact, same as the Playwright HTML report above - not published
+      # anywhere persistent (see the README's "Allure Report" section for why
+      # that's a deliberate scope cut, not an oversight).
+      - name: Upload Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: packages/e2e/allure-report/
+          retention-days: 14
+      - name: Summarize Allure results and notify n8n
+        if: always()
+        continue-on-error: true
+        env:
+          N8N_ALLURE_WEBHOOK_URL: ${{ secrets.N8N_ALLURE_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/notify-allure-summary.mjs
 
   # OWASP ZAP baseline scan: a passive-only DAST pass against the running app,
   # not a re-run of the Vitest security tests (those already live in the api
@@ -162,6 +185,18 @@ jobs:
           # README) - the report is the deliverable, not a hard merge gate.
           fail_action: false
           artifact_name: zap-baseline-report
+      # report_json.json is written by the action above into the job's working
+      # directory (repo root) regardless of artifact_name - that's what this
+      # reads, not the uploaded artifact.
+      - name: Summarize ZAP findings and notify n8n
+        if: always()
+        continue-on-error: true
+        env:
+          N8N_ZAP_WEBHOOK_URL: ${{ secrets.N8N_ZAP_WEBHOOK_URL }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/notify-zap-findings.mjs
 
   # Smoke-checks that both Dockerfiles actually build - doesn't push anywhere or
   # use these images to power the other jobs (see README for why CI uses native

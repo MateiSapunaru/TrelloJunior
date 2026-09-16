@@ -5,10 +5,13 @@
   "scripts": {
     "test": "playwright test",
     "test:ui": "playwright test --ui",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "report:allure": "allure generate ./allure-results --output ./allure-report"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@types/node": "^26.5.0"
+    "@types/node": "^26.5.0",
+    "allure": "^3.17.0",
+    "allure-playwright": "^3.12.2"
   }
 }

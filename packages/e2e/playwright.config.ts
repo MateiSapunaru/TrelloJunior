@@ -12,7 +12,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  reporter: "html",
+  // HTML for local/CI browsing (existing), allure-playwright alongside it to
+  // feed the Allure report generated in CI (see the ui job and the "Allure
+  // Report" design-decision section in the README) - the two write to
+  // separate output directories and don't interfere with each other.
+  reporter: [["html"], ["allure-playwright"]],
   use: {
     baseURL,
     trace: "on-first-retry",
