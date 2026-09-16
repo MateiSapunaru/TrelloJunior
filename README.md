@@ -903,6 +903,12 @@ rather than one workflow branching three ways internally:
   generated report's own summary widget, since that's an internal detail
   of the Allure report format this script shouldn't depend on.
 
+![The three published workflows in n8n](docs/images/n8n-workflows-list.jpg)
+
+| CI status | ZAP findings | Allure summary |
+| --- | --- | --- |
+| ![CI pipeline notification workflow: Webhook, an IF branching on success/failure, two Set nodes formatting the message, then Post to Discord](docs/images/n8n-ci-pipeline-workflow.jpg) | ![ZAP findings notification workflow: Webhook, a Set node formatting the message, then Post to Discord](docs/images/n8n-zap-findings-workflow.jpg) | ![Allure report notification workflow: Webhook, a Set node formatting the message, then Post to Discord](docs/images/n8n-allure-report-workflow.jpg) |
+
 Keeping these as three small workflows instead of one multiplexed workflow
 means each is independently easy to read and explain — "this one relays
 overall CI status," "this one summarizes a security scan," "this one
@@ -935,6 +941,12 @@ workflow engine is out of scope for a QA portfolio, so the artifacts here
 are the three workflow definitions and their CI-side integration, ready to
 point at any n8n instance (self-hosted, n8n Cloud, or a local one for a
 demo).
+
+All three, actually posting to Discord from a real CI run
+(commit `9612da3`, 27 E2E tests across 3 browser engines, 9 real ZAP
+findings — not placeholder data):
+
+![All three CI notifications posted to Discord: CI passed with per-job status, ZAP baseline scan findings by risk level, and E2E results with pass/fail/broken/skipped counts](docs/images/discord-notifications.jpg)
 
 </details>
 
